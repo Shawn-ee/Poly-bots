@@ -1,0 +1,40 @@
+[
+  {
+    "name": "bot-01",
+    "baseUrl": "http://localhost:3000",
+    "apiKey": "pk_live_xxx.secret",
+    "strategy": "passiveBuyer",
+    "marketIds": ["market-id-1"],
+    "pollIntervalMs": 2000,
+    "maxOrderSize": "1.000000",
+    "maxOpenOrders": 6,
+    "priceOffsetTicks": 0,
+    "staleOrderMs": 12000,
+    "decisionCooldownMs": 1500,
+    "capBackoffMs": 8000,
+    "similarOrderTicks": 1,
+    "maxSimilarOpenOrders": 1,
+    "maxOrdersPerSidePerOutcome": 1,
+    "tickSize": "0.01",
+    "maxPositionShares": "5.000000"
+  },
+  {
+    "name": "bot-02",
+    "baseUrl": "http://localhost:3000",
+    "apiKey": "pk_live_yyy.secret",
+    "strategy": "randomMaker",
+    "marketIds": ["market-id-1"],
+    "pollIntervalMs": 3000,
+    "maxOrderSize": "0.500000",
+    "maxOpenOrders": 6,
+    "priceOffsetTicks": 1,
+    "staleOrderMs": 12000,
+    "decisionCooldownMs": 1500,
+    "capBackoffMs": 8000,
+    "similarOrderTicks": 1,
+    "maxSimilarOpenOrders": 1,
+    "maxOrdersPerSidePerOutcome": 1,
+    "tickSize": "0.01",
+    "maxPositionShares": "2.000000"
+  }
+]
