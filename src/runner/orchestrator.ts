@@ -1,3 +1,4 @@
+import { setMaxListeners } from "node:events";
 import path from "node:path";
 import { AppConfig } from "../config/loadConfig.js";
 import { sleep } from "../utils/sleep.js";
@@ -6,6 +7,7 @@ import { BotRunner } from "./botRunner.js";
 export async function runOrchestrator(config: AppConfig): Promise<void> {
   const controller = new AbortController();
   const logsDir = path.resolve(process.cwd(), "logs");
+  setMaxListeners(Math.max(20, config.bots.length + 4), controller.signal);
 
   const shutdown = () => controller.abort();
   process.on("SIGINT", shutdown);

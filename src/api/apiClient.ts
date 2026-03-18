@@ -1,4 +1,10 @@
 import {
+  AdminCreateMarketRequest,
+  AdminCreateMarketResponse,
+  AdminMarketInvariantState,
+  AdminResolveMarketResponse,
+  AdminMarketStatus,
+  AdminMarketStatusResponse,
   ApiErrorEnvelope,
   Balance,
   CancelOrderResponse,
@@ -21,11 +27,25 @@ type RequestOptions = {
   idempotencyKey?: string;
 };
 
+type ApiClientOptions = {
+  authMode?: "bearer" | "cookie";
+  cookieName?: string;
+  extraHeaders?: Record<string, string>;
+};
+
 export type OrdersFilter = {
   marketId?: string;
   status?: Array<"OPEN" | "PARTIAL" | "FILLED" | "CANCELED">;
   cursor?: string;
   limit?: number;
+};
+
+export type MarketsFilter = {
+  status?: string;
+  view?: "resolved" | "all";
+  search?: string;
+  category?: string;
+  tags?: string;
 };
 
 export type FillsFilter = {
@@ -50,15 +70,29 @@ export class PolyApiError extends Error {
 
 export class ApiClient {
   private readonly baseUrl: string;
-  private readonly authHeader: string;
+  private readonly credential: string;
+  private readonly authMode: "bearer" | "cookie";
+  private readonly cookieName: string;
+  private readonly extraHeaders: Record<string, string>;
 
-  constructor(baseUrl: string, apiKey: string) {
+  constructor(baseUrl: string, credential: string, options: ApiClientOptions = {}) {
     this.baseUrl = baseUrl.replace(/\/+$/, "");
-    this.authHeader = `Bearer ${apiKey}`;
+    this.credential = credential;
+    this.authMode = options.authMode ?? "bearer";
+    this.cookieName = options.cookieName ?? "poly_session";
+    this.extraHeaders = options.extraHeaders ?? {};
   }
 
-  async listMarkets(): Promise<MarketDiscoveryResponse> {
-    return this.request("/api/markets");
+  async listMarkets(filters: MarketsFilter = {}): Promise<MarketDiscoveryResponse> {
+    return this.request("/api/markets", {
+      query: {
+        status: filters.status,
+        view: filters.view,
+        search: filters.search,
+        category: filters.category,
+        tags: filters.tags,
+      },
+    });
   }
 
   async getQuote(marketId: string, outcomeId?: string): Promise<QuoteResponse> {
@@ -127,6 +161,37 @@ export class ApiClient {
     });
   }
 
+  async createAdminMarket(input: AdminCreateMarketRequest): Promise<AdminCreateMarketResponse> {
+    return this.request("/api/admin/markets/create", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  async updateAdminMarketStatus(
+    marketId: string,
+    status: AdminMarketStatus,
+  ): Promise<AdminMarketStatusResponse> {
+    return this.request("/api/admin/markets/pause", {
+      method: "POST",
+      body: { marketId, status },
+    });
+  }
+
+  async resolveAdminMarket(
+    marketId: string,
+    winningOutcomeId: string,
+  ): Promise<AdminResolveMarketResponse> {
+    return this.request("/api/admin/markets/resolve", {
+      method: "POST",
+      body: { marketId, winningOutcomeId },
+    });
+  }
+
+  async getAdminMarketInvariant(marketId: string): Promise<AdminMarketInvariantState> {
+    return this.request(`/api/admin/markets/${encodeURIComponent(marketId)}/invariants`);
+  }
+
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
     for (const [key, value] of Object.entries(options.query ?? {})) {
@@ -139,9 +204,10 @@ export class ApiClient {
       method: options.method ?? "GET",
       headers: {
         Accept: "application/json",
-        Authorization: this.authHeader,
+        ...this.authHeaders(),
         ...(options.body ? { "Content-Type": "application/json" } : {}),
         ...(options.idempotencyKey ? { "Idempotency-Key": options.idempotencyKey } : {}),
+        ...this.extraHeaders,
       },
       ...(options.body ? { body: JSON.stringify(options.body) } : {}),
     });
@@ -157,6 +223,21 @@ export class ApiClient {
     }
 
     return parsed as T;
+  }
+
+  private authHeaders(): Record<string, string> {
+    if (this.authMode === "cookie") {
+      const cookieValue = this.credential.startsWith(`${this.cookieName}=`)
+        ? this.credential
+        : `${this.cookieName}=${this.credential}`;
+      return {
+        Cookie: cookieValue,
+      };
+    }
+
+    return {
+      Authorization: `Bearer ${this.credential}`,
+    };
   }
 }
 

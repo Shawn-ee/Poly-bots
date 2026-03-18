@@ -4,12 +4,24 @@ export type MarketDiscoveryResponse = {
   markets: MarketSummary[];
 };
 
+export type MarketTag = {
+  id: string;
+  name: string;
+  slug: string;
+  group: string | null;
+};
+
 export type MarketSummary = {
   id: string;
   title: string;
+  description?: string;
   status: string;
   mechanism: string;
   visibility: string;
+  resolveTime?: string | null;
+  resolvedOutcomeId?: string | null;
+  createdAt?: string;
+  tags?: MarketTag[];
   outcomes: Array<{ id: string; name: string }>;
   prices?: Record<string, number>;
   pricesByOutcome?: Record<string, number>;
@@ -146,6 +158,68 @@ export type CancelOrderResponse = {
     lockedUSDC: DecimalString;
   };
   position: Position | null;
+};
+
+export type AdminCreateMarketRequest = {
+  title: string;
+  description: string;
+  resolveTime?: string | null;
+  categoryId?: string | null;
+  tags?: string[];
+  type?: "BINARY" | "MULTI_WINNER";
+  outcomes?: string[];
+  visibility?: "PUBLIC" | "PRIVATE";
+  mechanism?: "ORDERBOOK" | "POOL";
+  isSimulated?: boolean;
+};
+
+export type AdminCreateMarketResponse = {
+  marketId: string;
+};
+
+export type AdminMarketStatus = "UPCOMING" | "LIVE" | "CLOSED" | "RESOLVED" | "ACTIVE" | "PAUSED" | "CANCELED";
+
+export type AdminMarketStatusResponse = {
+  status: string;
+};
+
+export type AdminResolveMarketRequest = {
+  marketId: string;
+  winningOutcomeId: string;
+};
+
+export type AdminResolveMarketResponse = {
+  ok: boolean;
+  marketId: string;
+  winningOutcomeId: string;
+  totalPoolPayout?: DecimalString;
+  totalWinningShares?: DecimalString;
+  collateralDebitedUSDC?: DecimalString;
+  payouts?: Array<{ userId: string; amountPaid: DecimalString }>;
+};
+
+export type AdminMarketInvariantState = {
+  marketId: string;
+  marketStatus: string;
+  marketMechanism: string;
+  marketVisibility: string;
+  outcome1: { id: string; name: string };
+  outcome2: { id: string; name: string };
+  bestBidOutcome1: DecimalString | null;
+  bestBidOutcome2: DecimalString | null;
+  bestAskOutcome1: DecimalString | null;
+  bestAskOutcome2: DecimalString | null;
+  bidSum: DecimalString | null;
+  askSum: DecimalString | null;
+  bidInvariantPass: boolean;
+  askInvariantPass: boolean;
+  marketCollateralUSDC: DecimalString;
+  outstandingSharesOutcome1: DecimalString;
+  outstandingSharesOutcome2: DecimalString;
+  outstandingSharesEqual: boolean;
+  collateralMatchesOutstanding: boolean;
+  invariantStatusSummary: string;
+  timestamp: string;
 };
 
 export type ApiErrorEnvelope = {

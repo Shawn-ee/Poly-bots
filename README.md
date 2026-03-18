@@ -4,7 +4,7 @@
 
 ## What It Does
 
-- Runs one or more conservative autonomous bots locally against `http://localhost:3000`
+- Runs one or more deterministic, non-AI simulated traders against `http://localhost:3000`
 - Uses canonical routes only:
   - `GET /api/markets`
   - `GET /api/markets/:id/quote`
@@ -16,16 +16,53 @@
   - `GET /api/account/balance`
   - `GET /api/account/positions`
   - `GET /api/account/ledger`
-  - optional helpers for `GET /api/stream/market/:marketId` and `GET /api/stream/me/orders`
 - Uses limit orders only
-- Sends `Idempotency-Key` on every order submission
 - Writes readable per-bot logs to `logs/`
 
-## Current Strategies
+## Bot Types
 
-- `passiveBuyer`: posts small buy limits at or below the top of book, respects total open-order caps, and skips duplicate working quotes
-- `passiveSeller`: posts small sell limits conservatively when inventory exists and avoids redundant working orders
-- `randomMaker`: occasionally posts very small buy or sell limits near the book with cooldowns and duplicate suppression
+- `tightMarketMaker`: keeps both bid and ask near fair price, improves the top of book when reasonable, and refreshes stale quotes quickly
+- `inventoryAwareMaker`: keeps both sides quoted but leans prices based on current inventory so the bot does not drift too far one way
+- `noiseTrader`: occasionally joins or crosses the spread with small size to generate fills and believable short-term price action
+
+These bots are rule-based only. There is no LLM, news inference, or external intelligence.
+
+## Market Model
+
+- Fair price defaults to midpoint when both best bid and best ask exist
+- If one side is missing, fair price is inferred conservatively from the available side
+- If the book is empty, bots fall back to a configured reference price, usually `0.50`
+- Prices are normalized to tick size and clamped to valid market bounds
+
+## Simulation Behavior
+
+- Makers quote within a few ticks of fair value instead of far away passive orders
+- Some bots maintain both bid and ask simultaneously
+- `noiseTrader` can take liquidity with a low bounded probability to create actual prints
+- Orders are canceled when stale, too far from fair price, or too far from top-of-book
+- Duplicate / near-duplicate quotes are suppressed unless a materially better replacement is needed
+- Loop timing uses jitter so bots do not all act on the same cadence
+
+## Safety Controls
+
+- Total open-order cap per bot/API key
+- Max orders per side
+- Max long inventory per outcome
+- Decision cooldowns
+- Cap backoff for `OPEN_ORDER_LIMIT_EXCEEDED`
+- Terminal pause or long cooldown for `DAILY_NOTIONAL_LIMIT_EXCEEDED`
+- Transport / auth / validation errors classified separately in the runner
+
+## Daily Notional Exhaustion
+
+When the exchange returns `DAILY_NOTIONAL_LIMIT_EXCEEDED`, the bot no longer retries every poll.
+
+- Default behavior is `pause_for_run`
+- The runner emits a `bot_paused` event once
+- Further placement attempts are suppressed instead of creating repeated submit/error loops
+- Stale order cancellation can still happen if the bot has open orders
+
+You can change this with `dailyNotionalPauseMode` if you want cooldown-until-reset behavior instead.
 
 ## Requirements
 
@@ -44,25 +81,44 @@ npm install
 1. Copy `.env.example` to `.env`
 2. Copy `bots.example.json` to `bots.json`
 3. Replace each `apiKey` with a real canonical API key in the format `keyId.secret`
-4. Update `marketIds` and optional bot limits
+4. Update `marketIds` and any simulation knobs you care about
 
-Environment variables are optional overrides for safe defaults, including:
+Useful config fields:
 
-- `POLY_BOT_CONFIG`
-- `POLY_BOT_BASE_URL`
-- `POLY_BOT_POLL_INTERVAL_MS`
-- `POLY_BOT_STALE_ORDER_MS`
-- `POLY_BOT_DECISION_COOLDOWN_MS`
-- `POLY_BOT_CAP_BACKOFF_MS`
-- `POLY_BOT_TICK_SIZE`
-- `POLY_BOT_MAX_ORDER_SIZE`
-- `POLY_BOT_MAX_OPEN_ORDERS`
-- `POLY_BOT_SIMILAR_ORDER_TICKS`
-- `POLY_BOT_MAX_SIMILAR_OPEN_ORDERS`
-- `POLY_BOT_MAX_ORDERS_PER_SIDE_PER_OUTCOME`
-- `POLY_BOT_STARTUP_STAGGER_MS`
+- `strategy`
+- `loopIntervalMinMs` / `loopIntervalMaxMs`
+- `pausedPollIntervalMs`
+- `maxOpenOrders`
+- `targetSpreadTicks`
+- `quoteOffsetMinTicks` / `quoteOffsetMaxTicks`
+- `staleOrderMs`
+- `minQuoteLifetimeMs`
+- `staleDistanceTicks`
+- `replaceThresholdTicks`
+- `maxOrdersPerSide`
+- `takerProbability`
+- `takerThresholdTicks`
+- `maxPositionShares`
+- `inventoryTargetShares`
+- `inventorySkewStrength`
+- `dailyNotionalPauseMode`
 
-## Run One Or More Bots
+Environment variables are optional overrides for the same defaults in `.env.example`.
+
+## Local Simulation Setup
+
+The local `Poly` script [create_sim_bot_credentials.ts](C:\Users\hecto\Desktop\projects\PolyProj\Poly\scripts\create_sim_bot_credentials.ts) now:
+
+- creates 20 bot credentials
+- sets `maxOpenOrders` to `6`
+- sets sim `maxDailySubmittedNotional` to `20000.000000`
+- seeds small starting inventory so makers can post asks as well as bids
+- mixes `tightMarketMaker`, `inventoryAwareMaker`, and `noiseTrader`
+- writes the generated bot config to [generated.bots.json](C:\Users\hecto\Desktop\projects\PolyProj\poly-bot\generated.bots.json)
+
+When a bot is paused for `DAILY_NOTIONAL_LIMIT_EXCEEDED`, it now enters a low-traffic idle mode instead of continuing the full quote/evaluate loop. It uses `pausedPollIntervalMs` for a slow heartbeat and avoids repeated skip-log spam.
+
+## Run
 
 Development:
 
@@ -77,28 +133,63 @@ npm run build
 npm start
 ```
 
-All bots listed in the config file are started by the orchestrator. To run just one bot, keep only one entry in `bots.json`.
+## Clean Reset
 
-## Simulation Defaults
+Use the reset workflow when you want to cancel all bot-owned open orders, clear bot-run monitor state, and start a fresh simulation run without touching non-bot users.
 
-- The local sim credential generator in `Poly/scripts/create_sim_bot_credentials.ts` now creates API keys with `maxOpenOrders: 6`
-- Generated sim bot configs use `staleOrderMs: 12000`
-- The runner enforces the total open-order cap using `GET /api/orders?status=OPEN,PARTIAL`
-- When the exchange still returns `OPEN_ORDER_LIMIT_EXCEEDED`, the bot enters a short cooldown before trying to place again
-- Bots skip placing a new order when an existing same-side order is already within one tick of the target quote
+Dry run:
+
+```bash
+npm run bots:reset -- --dry-run
+```
+
+Full reset without restart:
+
+```bash
+npm run bots:reset
+```
+
+Full reset and restart:
+
+```bash
+npm run bots:restart-clean
+```
+
+What it clears:
+
+- open orders created by the configured bot API credentials
+- bot API usage logs
+- bot API order request history
+- bot API rate-limit buckets
+- bot account canonical account-stream events used by Bot Monitor
+- local `poly-bot/logs/*.log`
+
+What it does not clear:
+
+- non-bot users
+- non-bot orders
+- market data for normal users
+- fills, ledger rows, or positions for unrelated accounts
+
+Safety notes:
+
+- bot discovery is config-scoped first, using the bot config file and bot API key IDs
+- the reset only targets the matching bot API credentials and their users
+- Bot Monitor current-run totals are separated by a run boundary file so old archive data does not pollute the new run
+- the wrapper uses the local runner PID file to stop the existing `poly-bot` process before restart when possible
 
 ## Logging
 
-- Each bot logs to console and `logs/<bot-name>.log`
-- Logs include timestamps, bot name, `quote_seen`, `decision_made`, `order_submitted`, `order_submit_skipped`, `order_canceled`, `fill_seen`, and `error`
+Each bot logs structured events such as:
 
-## Limitations
+- `quote_seen`
+- `decision_made`
+- `order_submission`
+- `order_submitted`
+- `order_submit_skipped`
+- `order_canceled`
+- `fill_seen`
+- `bot_paused`
+- `error`
 
-- Limit orders only
-- No market orders
-- External-user style only
-- No database access
-- No imports from `Poly` internals
-- Polling-first runner design
-- Account balances and positions are user-level on the server, not isolated per API key
-- Optional SSE helper is included for future use but is not required by the runner
+This makes it easier to distinguish normal non-action from true failure states.

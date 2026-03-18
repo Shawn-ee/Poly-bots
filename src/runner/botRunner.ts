@@ -2,26 +2,36 @@ import { ApiClient, PolyApiError } from "../api/apiClient.js";
 import { Order, Quote } from "../api/types.js";
 import { BotConfig } from "../config/loadConfig.js";
 import { BotLogger } from "../logging/logger.js";
-import { getStaleOrders } from "../strategies/common.js";
-import { passiveBuyerStrategy, StrategyAction, StrategyContext } from "../strategies/passiveBuyer.js";
-import { passiveSellerStrategy } from "../strategies/passiveSeller.js";
-import { randomMakerStrategy } from "../strategies/randomMaker.js";
+import { inventoryAwareMakerStrategy } from "../strategies/inventoryAwareMaker.js";
+import { noiseTraderStrategy } from "../strategies/noiseTrader.js";
+import {
+  collectStaleCleanupActions,
+  sampleLoopDelayMs,
+  StrategyAction,
+  StrategyContext,
+} from "../strategies/common.js";
+import { tightMarketMakerStrategy } from "../strategies/tightMarketMaker.js";
 import { sleep } from "../utils/sleep.js";
+import {
+  BotBlockState,
+  classifyPlacementError,
+  nextTransportBackoffMs,
+  resetTransportBackoff,
+} from "./errorHandling.js";
 
 type StrategyFn = (context: StrategyContext) => StrategyAction[];
 
 export class BotRunner {
   private readonly api: ApiClient;
-  private readonly apiKeyId: string;
   private readonly logger: BotLogger;
   private readonly seenFillIds = new Set<string>();
   private readonly lastPlacementByKey = new Map<string, number>();
-  private capBackoffUntil = 0;
-  private consecutiveCapRejections = 0;
+  private placementBlock: BotBlockState = { kind: "none" };
+  private transportBackoffMs = 0;
+  private lastPauseSkipLogAt = 0;
 
   constructor(private readonly bot: BotConfig, logsDir: string) {
     this.api = new ApiClient(bot.baseUrl, bot.apiKey);
-    this.apiKeyId = bot.apiKey.split(".", 1)[0] ?? "";
     this.logger = new BotLogger(bot.name, logsDir);
   }
 
@@ -43,7 +53,7 @@ export class BotRunner {
       }
 
       try {
-        await sleep(this.bot.pollIntervalMs, signal);
+        await sleep(this.nextLoopDelayMs(), signal);
       } catch {
         break;
       }
@@ -58,33 +68,26 @@ export class BotRunner {
       return;
     }
 
-    let [balance, positions, fillsPage, openOrders] = await Promise.all([
+    if (this.isDailyNotionalPlacementBlock()) {
+      this.logPauseHeartbeat();
+      return;
+    }
+
+    const [balance, positions, fillsPage, openOrdersPage] = await Promise.all([
       this.api.getBalance(),
       this.api.getPositions(),
       this.api.getFills({ limit: 25 }),
-      this.loadKeyScopedOpenOrders(),
+      this.api.getOrders({
+        status: ["OPEN", "PARTIAL"],
+        limit: 100,
+      }),
     ]);
+    let openOrders = openOrdersPage.items;
 
     for (const fill of fillsPage.items) {
       if (!this.seenFillIds.has(fill.id)) {
         this.seenFillIds.add(fill.id);
         this.logger.info("fill_seen", fill);
-      }
-    }
-
-    const cleanup = await this.cancelStaleOrders(openOrders, signal);
-    openOrders = cleanup.openOrders;
-
-    if (cleanup.canceledAny) {
-      [balance, positions, openOrders] = await Promise.all([
-        this.api.getBalance(),
-        this.api.getPositions(),
-        this.loadKeyScopedOpenOrders(),
-      ]);
-
-      if (openOrders.length < this.bot.maxOpenOrders) {
-        this.consecutiveCapRejections = 0;
-        this.capBackoffUntil = 0;
       }
     }
 
@@ -94,6 +97,17 @@ export class BotRunner {
       for (const quote of quoteResponse.quotes) {
         const marketOpenOrders = openOrders.filter((order) => order.marketId === marketId);
         const outcomeOpenOrders = marketOpenOrders.filter((order) => order.outcomeId === quote.outcomeId);
+        const context: StrategyContext = {
+          bot: this.bot,
+          marketId,
+          quote,
+          balance,
+          positions: positions.items,
+          totalOpenOrders: openOrders,
+          marketOpenOrders,
+          outcomeOpenOrders,
+          now: new Date(),
+        };
 
         this.logger.info("quote_seen", {
           marketId,
@@ -106,80 +120,29 @@ export class BotRunner {
           maxOpenOrders: this.bot.maxOpenOrders,
         });
 
-        const actions = this.selectStrategy()({
-          bot: this.bot,
-          marketId,
-          quote,
-          balance,
-          positions: positions.items,
-          totalOpenOrders: openOrders,
-          marketOpenOrders,
-          outcomeOpenOrders,
-          now: new Date(),
-        });
+        const activeBlock = this.resolvePlacementBlock(Date.now());
+        const actions = activeBlock
+          ? collectStaleCleanupActions(context)
+          : this.selectStrategy()(context);
 
-        openOrders = await this.executeActions(actions, openOrders, signal);
+        if (activeBlock) {
+          this.logPlacementBlockSkip(marketId, quote.outcomeId, activeBlock, openOrders.length);
+        }
+
+        openOrders = await this.executeActions(actions, marketId, quote, openOrders, signal);
       }
     }
-  }
-
-  private async loadKeyScopedOpenOrders(): Promise<Order[]> {
-    const page = await this.api.getOrders({
-      status: ["OPEN", "PARTIAL"],
-      limit: 100,
-    });
-    return page.items.filter((order) => order.apiKeyId === this.apiKeyId);
-  }
-
-  private async cancelStaleOrders(openOrders: Order[], signal: AbortSignal): Promise<{
-    openOrders: Order[];
-    canceledAny: boolean;
-  }> {
-    const staleOrders = getStaleOrders(openOrders, this.bot.staleOrderMs, new Date()).sort((left, right) =>
-      (left.createdAt ?? "").localeCompare(right.createdAt ?? ""),
-    );
-
-    if (staleOrders.length === 0) {
-      return { openOrders, canceledAny: false };
-    }
-
-    let nextOpenOrders = openOrders;
-    let canceledAny = false;
-
-    for (const order of staleOrders) {
-      if (signal.aborted) {
-        break;
-      }
-
-      try {
-        const result = await this.api.cancelOrder(order.id);
-        nextOpenOrders = nextOpenOrders.filter((item) => item.id !== order.id);
-        canceledAny = true;
-        this.logger.info("order_canceled", {
-          orderId: order.id,
-          reason: "stale_order_cleanup",
-          totalOpenOrders: nextOpenOrders.length,
-          order: result.order,
-        });
-      } catch (error) {
-        this.logger.error("error", {
-          stage: "cancel_stale_order",
-          orderId: order.id,
-          reason: "stale_order_cleanup",
-          ...serializeError(error),
-        });
-      }
-    }
-
-    return { openOrders: nextOpenOrders, canceledAny };
   }
 
   private async executeActions(
     actions: StrategyAction[],
+    marketId: string,
+    quote: Quote,
     openOrders: Order[],
     signal: AbortSignal,
   ): Promise<Order[]> {
     let nextOpenOrders = openOrders;
+    let pauseSkipLogged = false;
 
     for (const action of actions) {
       if (signal.aborted) {
@@ -194,6 +157,7 @@ export class BotRunner {
             orderId: action.orderId,
             reason: action.reason,
             totalOpenOrders: nextOpenOrders.length,
+            ...(action.details ? action.details : {}),
             order: result.order,
           });
         } catch (error) {
@@ -215,67 +179,67 @@ export class BotRunner {
           reason: action.reason,
           totalOpenOrders: nextOpenOrders.length,
           maxOpenOrders: this.bot.maxOpenOrders,
-          capBackoffUntil:
-            this.capBackoffUntil > Date.now() ? new Date(this.capBackoffUntil).toISOString() : null,
-          ...action.details,
+          capBackoffUntil: this.placementBlock.kind === "cooldown" ? new Date(this.placementBlock.until).toISOString() : null,
+          ...(action.details ? action.details : {}),
         });
         continue;
       }
 
       const now = Date.now();
-      const placementKey = `${action.marketId}:${action.outcomeId}:${action.side}`;
-
-      if (nextOpenOrders.length >= this.bot.maxOpenOrders) {
-        this.logger.info("order_submit_skipped", {
-          marketId: action.marketId,
-          outcomeId: action.outcomeId,
-          side: action.side,
-          reason: "at_total_open_order_cap_skip",
-          totalOpenOrders: nextOpenOrders.length,
-          maxOpenOrders: this.bot.maxOpenOrders,
-        });
+      const blockReason = this.resolvePlacementBlock(now);
+      if (blockReason) {
+        if (!pauseSkipLogged && now - this.lastPauseSkipLogAt >= this.bot.pauseLogIntervalMs) {
+          this.lastPauseSkipLogAt = now;
+          pauseSkipLogged = true;
+          this.logger.info("order_submit_skipped", {
+            marketId,
+            outcomeId: quote.outcomeId,
+            side: action.side,
+            reason: blockReason.reason,
+            totalOpenOrders: nextOpenOrders.length,
+            maxOpenOrders: this.bot.maxOpenOrders,
+            capBackoffUntil:
+              this.placementBlock.kind === "cooldown" ? new Date(this.placementBlock.until).toISOString() : null,
+            code: blockReason.code ?? null,
+          });
+        }
         continue;
       }
 
-      if (this.capBackoffUntil > now) {
-        this.logger.info("order_submit_skipped", {
-          marketId: action.marketId,
-          outcomeId: action.outcomeId,
-          side: action.side,
-          reason: "cooldown_skip",
-          cooldownType: "cap_backoff",
-          capBackoffUntil: new Date(this.capBackoffUntil).toISOString(),
-          totalOpenOrders: nextOpenOrders.length,
-          maxOpenOrders: this.bot.maxOpenOrders,
-        });
-        continue;
-      }
-
+      const placementKey = `${marketId}:${quote.outcomeId}:${action.side}`;
       const lastPlacementAt = this.lastPlacementByKey.get(placementKey) ?? 0;
       if (lastPlacementAt + this.bot.decisionCooldownMs > now) {
         this.logger.info("order_submit_skipped", {
-          marketId: action.marketId,
-          outcomeId: action.outcomeId,
+          marketId,
+          outcomeId: quote.outcomeId,
           side: action.side,
           reason: "cooldown_skip",
           cooldownType: "decision",
           nextAllowedAt: new Date(lastPlacementAt + this.bot.decisionCooldownMs).toISOString(),
+          totalOpenOrders: nextOpenOrders.length,
+          maxOpenOrders: this.bot.maxOpenOrders,
         });
         continue;
       }
 
       this.logger.info("decision_made", {
-        marketId: action.marketId,
-        outcomeId: action.outcomeId,
+        marketId,
+        outcomeId: quote.outcomeId,
         side: action.side,
         reason: action.reason,
         price: action.price,
         size: action.size,
         totalOpenOrders: nextOpenOrders.length,
+        ...(action.details ? action.details : {}),
       });
 
       try {
-        const totalOpenOrdersBefore = nextOpenOrders.length;
+        this.logger.info("order_submission", {
+          idempotencyKey: action.idempotencyKey,
+          clientOrderId: action.clientOrderId,
+          totalOpenOrders: nextOpenOrders.length,
+          maxOpenOrders: this.bot.maxOpenOrders,
+        });
         const result = await this.api.placeLimitOrder(
           {
             marketId: action.marketId,
@@ -289,51 +253,135 @@ export class BotRunner {
         );
 
         this.lastPlacementByKey.set(placementKey, now);
-        this.consecutiveCapRejections = 0;
-        this.capBackoffUntil = 0;
+        this.placementBlock = { kind: "none" };
+        this.transportBackoffMs = resetTransportBackoff();
         nextOpenOrders = upsertOpenOrder(nextOpenOrders, result.order);
-
         this.logger.info("order_submitted", {
           order: result.order,
-          idempotencyKey: action.idempotencyKey,
-          totalOpenOrdersBefore,
-          totalOpenOrdersAfter: nextOpenOrders.length,
+          totalOpenOrders: nextOpenOrders.length,
+          ...(action.details ? action.details : {}),
         });
       } catch (error) {
-        const serialized = serializeError(error);
-        if (error instanceof PolyApiError && error.code === "OPEN_ORDER_LIMIT_EXCEEDED") {
-          this.consecutiveCapRejections += 1;
-          const backoffMultiplier = Math.min(this.consecutiveCapRejections, 3);
-          this.capBackoffUntil = now + this.bot.capBackoffMs * backoffMultiplier;
+        const classification = classifyPlacementError(error, this.bot, now, nextTransportBackoffMs(this.transportBackoffMs));
+        if (classification.category === "transport") {
+          this.transportBackoffMs = nextTransportBackoffMs(this.transportBackoffMs);
         }
 
-        this.logger.warn("error", {
+        if (classification.blockState.kind !== "none") {
+          const enteringPause =
+            classification.blockState.kind === "paused" &&
+            (this.placementBlock.kind !== "paused" || this.placementBlock.reason !== classification.blockState.reason);
+          this.placementBlock = classification.blockState;
+          if (enteringPause) {
+            this.logger.warn("bot_paused", {
+              reason: classification.blockState.reason,
+              code: classification.blockState.code ?? null,
+            });
+          }
+        }
+
+        const serialized = serializeError(error);
+        const logPayload = {
           stage: "place_order",
-          marketId: action.marketId,
-          outcomeId: action.outcomeId,
+          marketId,
+          outcomeId: quote.outcomeId,
           side: action.side,
           idempotencyKey: action.idempotencyKey,
           totalOpenOrders: nextOpenOrders.length,
           maxOpenOrders: this.bot.maxOpenOrders,
-          consecutiveCapRejections: this.consecutiveCapRejections,
-          capBackoffUntil:
-            this.capBackoffUntil > now ? new Date(this.capBackoffUntil).toISOString() : null,
+          blockState: serializeBlockState(this.placementBlock),
           ...serialized,
-        });
+        };
+
+        if (error instanceof PolyApiError) {
+          this.logger.warn("error", logPayload);
+        } else {
+          this.logger.error("error", logPayload);
+        }
       }
     }
 
     return nextOpenOrders;
   }
 
+  private resolvePlacementBlock(now: number): { reason: string; code?: string } | null {
+    if (this.placementBlock.kind === "paused") {
+      return {
+        reason: this.placementBlock.reason,
+        ...(this.placementBlock.code ? { code: this.placementBlock.code } : {}),
+      };
+    }
+
+    if (this.placementBlock.kind === "cooldown") {
+      if (this.placementBlock.until > now) {
+        return {
+          reason: this.placementBlock.reason,
+          ...(this.placementBlock.code ? { code: this.placementBlock.code } : {}),
+        };
+      }
+
+      this.placementBlock = { kind: "none" };
+    }
+
+    return null;
+  }
+
+  private isDailyNotionalPlacementBlock(): boolean {
+    return this.placementBlock.kind !== "none" && this.placementBlock.reason === "daily_notional_exhausted";
+  }
+
+  private nextLoopDelayMs(): number {
+    if (this.isDailyNotionalPlacementBlock()) {
+      return this.bot.pausedPollIntervalMs;
+    }
+    return sampleLoopDelayMs(this.bot);
+  }
+
+  private logPlacementBlockSkip(
+    marketId: string,
+    outcomeId: string,
+    blockReason: { reason: string; code?: string },
+    totalOpenOrders: number,
+  ) {
+    const now = Date.now();
+    if (now - this.lastPauseSkipLogAt < this.bot.pauseLogIntervalMs) {
+      return;
+    }
+
+    this.lastPauseSkipLogAt = now;
+    this.logger.info("order_submit_skipped", {
+      marketId,
+      outcomeId,
+      reason: blockReason.reason,
+      totalOpenOrders,
+      maxOpenOrders: this.bot.maxOpenOrders,
+      capBackoffUntil: this.placementBlock.kind === "cooldown" ? new Date(this.placementBlock.until).toISOString() : null,
+      code: blockReason.code ?? null,
+    });
+  }
+
+  private logPauseHeartbeat() {
+    const now = Date.now();
+    if (now - this.lastPauseSkipLogAt < this.bot.pauseLogIntervalMs) {
+      return;
+    }
+
+    this.lastPauseSkipLogAt = now;
+    this.logger.info("bot_paused_heartbeat", {
+      reason: this.placementBlock.kind === "paused" ? this.placementBlock.reason : "unknown_pause",
+      code: this.placementBlock.kind === "paused" ? this.placementBlock.code ?? null : null,
+      pausedPollIntervalMs: this.bot.pausedPollIntervalMs,
+    });
+  }
+
   private selectStrategy(): StrategyFn {
     switch (this.bot.strategy) {
-      case "passiveBuyer":
-        return passiveBuyerStrategy;
-      case "passiveSeller":
-        return passiveSellerStrategy;
-      case "randomMaker":
-        return randomMakerStrategy;
+      case "tightMarketMaker":
+        return tightMarketMakerStrategy;
+      case "noiseTrader":
+        return noiseTraderStrategy;
+      case "inventoryAwareMaker":
+        return inventoryAwareMakerStrategy;
     }
   }
 }
@@ -344,6 +392,22 @@ function upsertOpenOrder(openOrders: Order[], order: Order): Order[] {
     withoutOrder.push(order);
   }
   return withoutOrder;
+}
+
+function serializeBlockState(state: BotBlockState) {
+  switch (state.kind) {
+    case "none":
+      return { kind: "none" };
+    case "paused":
+      return { kind: "paused", reason: state.reason, code: state.code ?? null };
+    case "cooldown":
+      return {
+        kind: "cooldown",
+        reason: state.reason,
+        code: state.code ?? null,
+        until: new Date(state.until).toISOString(),
+      };
+  }
 }
 
 function serializeError(error: unknown) {
