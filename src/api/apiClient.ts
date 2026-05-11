@@ -1,6 +1,9 @@
 import {
+  AccountStreamEvent,
   AdminCreateMarketRequest,
   AdminCreateMarketResponse,
+  AdminImportReferenceMarketRequest,
+  AdminImportReferenceMarketResponse,
   AdminMarketInvariantState,
   AdminResolveMarketResponse,
   AdminMarketStatus,
@@ -9,16 +12,20 @@ import {
   Balance,
   CancelOrderResponse,
   CursorPage,
+  EventStreamEnvelope,
   Fill,
   GetOrderResponse,
   LedgerEntry,
+  MarketStreamEvent,
   MarketDiscoveryResponse,
+  MintCompleteSetResponse,
   Order,
   PlaceOrderRequest,
   PlaceOrderResponse,
   PositionsResponse,
   QuoteResponse,
 } from "./types.js";
+import { SseClient } from "./sseClient.js";
 
 type RequestOptions = {
   method?: "GET" | "POST" | "DELETE";
@@ -161,8 +168,24 @@ export class ApiClient {
     });
   }
 
+  async mintCompleteSet(marketId: string, quantity: string): Promise<MintCompleteSetResponse> {
+    return this.request(`/api/orderbook/${encodeURIComponent(marketId)}/mint`, {
+      method: "POST",
+      body: { quantity },
+    });
+  }
+
   async createAdminMarket(input: AdminCreateMarketRequest): Promise<AdminCreateMarketResponse> {
     return this.request("/api/admin/markets/create", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  async importAdminReferenceMarket(
+    input: AdminImportReferenceMarketRequest,
+  ): Promise<AdminImportReferenceMarketResponse> {
+    return this.request("/api/admin/reference-markets/polymarket/import", {
       method: "POST",
       body: input,
     });
@@ -192,13 +215,22 @@ export class ApiClient {
     return this.request(`/api/admin/markets/${encodeURIComponent(marketId)}/invariants`);
   }
 
+  createMarketStreamClient(marketId: string, outcomeId?: string): SseClient {
+    return new SseClient(
+      this.buildUrl(`/api/stream/market/${encodeURIComponent(marketId)}`, outcomeId ? { outcomeId } : undefined),
+      this.authHeaders(),
+    );
+  }
+
+  createAccountStreamClient(marketId?: string): SseClient {
+    return new SseClient(
+      this.buildUrl("/api/stream/me/orders", marketId ? { marketId } : undefined),
+      this.authHeaders(),
+    );
+  }
+
   private async request<T>(path: string, options: RequestOptions = {}): Promise<T> {
-    const url = new URL(`${this.baseUrl}${path}`);
-    for (const [key, value] of Object.entries(options.query ?? {})) {
-      if (value !== undefined) {
-        url.searchParams.set(key, String(value));
-      }
-    }
+    const url = this.buildUrl(path, options.query);
 
     const response = await fetch(url, {
       method: options.method ?? "GET",
@@ -238,6 +270,16 @@ export class ApiClient {
     return {
       Authorization: `Bearer ${this.credential}`,
     };
+  }
+
+  private buildUrl(path: string, query?: Record<string, string | number | undefined>): string {
+    const url = new URL(`${this.baseUrl}${path}`);
+    for (const [key, value] of Object.entries(query ?? {})) {
+      if (value !== undefined) {
+        url.searchParams.set(key, String(value));
+      }
+    }
+    return url.toString();
   }
 }
 

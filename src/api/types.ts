@@ -160,6 +160,13 @@ export type CancelOrderResponse = {
   position: Position | null;
 };
 
+export type MintCompleteSetResponse = {
+  ok: boolean;
+  marketId: string;
+  quantity: DecimalString;
+  outcomesMinted: number;
+};
+
 export type AdminCreateMarketRequest = {
   title: string;
   description: string;
@@ -175,6 +182,53 @@ export type AdminCreateMarketRequest = {
 
 export type AdminCreateMarketResponse = {
   marketId: string;
+};
+
+export type AdminImportReferenceMarketRequest = {
+  createEvents?: boolean;
+  event?: {
+    title: string;
+    slug?: string | null;
+    description?: string | null;
+    category?: string | null;
+    status?: string | null;
+    source?: string | null;
+    externalEventId?: string | null;
+    externalSlug?: string | null;
+    image?: string | null;
+    icon?: string | null;
+    metadata?: unknown;
+  } | null;
+  market: {
+    title: string;
+    description?: string | null;
+    category?: string | null;
+    resolveTime?: string | null;
+    type?: "BINARY" | "MULTI_WINNER";
+    desiredStatus?: "draft" | "paused" | "live";
+    externalMarketId?: string | null;
+    conditionId?: string | null;
+    externalSlug?: string | null;
+    referenceSource?: string | null;
+    referenceMetadata?: unknown;
+    outcomes: Array<{
+      name: string;
+      displayOrder?: number | null;
+      isTradable?: boolean | null;
+      referenceTokenId?: string | null;
+      referenceOutcomeLabel?: string | null;
+      referenceMetadata?: unknown;
+    }>;
+  };
+};
+
+export type AdminImportReferenceMarketResponse = {
+  ok: boolean;
+  eventId: string | null;
+  eventCreated: boolean;
+  marketId: string;
+  marketCreated: boolean;
+  outcomeIds: string[];
 };
 
 export type AdminMarketStatus = "UPCOMING" | "LIVE" | "CLOSED" | "RESOLVED" | "ACTIVE" | "PAUSED" | "CANCELED";
@@ -229,7 +283,7 @@ export type ApiErrorEnvelope = {
   };
 };
 
-export type EventStreamEnvelope = {
+export type EventStreamEnvelope<TPayload = unknown> = {
   id: string;
   sequence: string;
   type: string;
@@ -238,5 +292,73 @@ export type EventStreamEnvelope = {
   marketId: string | null;
   outcomeId: string | null;
   userId: string | null;
-  payload: unknown;
+  payload: TPayload;
 };
+
+export type MarketStreamTopLevel = {
+  outcomeId: string;
+  price: DecimalString;
+  size: DecimalString;
+};
+
+export type PublicTradeStreamItem = {
+  id: string;
+  executionId: string;
+  marketId: string;
+  outcomeId: string;
+  outcomeName: string;
+  outcome: string;
+  side: OrderSide;
+  price: DecimalString;
+  quantity: DecimalString;
+  shares: DecimalString;
+  cost: DecimalString;
+  createdAt: string;
+};
+
+export type MarketStreamPayload = {
+  topLevels: {
+    bids: MarketStreamTopLevel[];
+    asks: MarketStreamTopLevel[];
+  };
+  recentTrades: PublicTradeStreamItem[];
+};
+
+export type AccountStreamOrder = {
+  id: string;
+  clientOrderId: string | null;
+  apiKeyId: string | null;
+  marketId: string;
+  outcomeId: string;
+  outcomeName: string;
+  side: OrderSide;
+  price: DecimalString;
+  amount: DecimalString;
+  remaining: DecimalString;
+  status: string;
+  createdAt: string;
+};
+
+export type AccountStreamFill = {
+  id: string;
+  marketId: string;
+  outcomeId: string;
+  side: OrderSide;
+  price: DecimalString;
+  size: DecimalString;
+  feeUSDC: DecimalString;
+  createdAt: string;
+};
+
+export type AccountStreamPayload = {
+  balance: {
+    availableUSDC: DecimalString;
+    lockedUSDC: DecimalString;
+    totalUSDC: DecimalString;
+  } | null;
+  orders: AccountStreamOrder[];
+  fills: AccountStreamFill[];
+};
+
+export type MarketStreamEvent = EventStreamEnvelope<MarketStreamPayload>;
+export type AccountStreamEvent = EventStreamEnvelope<AccountStreamPayload>;

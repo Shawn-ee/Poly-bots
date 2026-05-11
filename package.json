@@ -17,8 +17,17 @@
     "sim:resolve": "tsx src/runner/simMarketResolver.ts",
     "sim:health": "tsx src/runner/simHealthChecker.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:dynamic-market-maker": "tsx scripts/testDynamicMarketMaker.ts",
+    "test:production-risk-controls": "npm run build && node scripts/testProductionRiskControls.mjs",
+    "test:reference-market-import": "tsx scripts/testReferenceMarketImport.ts",
+    "investigate:polymarket-worldcup-top20": "tsx scripts/investigatePolymarketWorldCupTopActive.ts",
+    "investigate:polymarket-soccer-top20": "tsx scripts/investigatePolymarketSoccerTopActive.ts",
+    "inspect:polymarket-market": "tsx scripts/inspectPolymarketMarket.ts",
     "bots:reset": "tsx scripts/botsReset.ts",
-    "bots:restart-clean": "tsx scripts/botsReset.ts --restart"
+    "bots:restart-clean": "tsx scripts/botsReset.ts --restart",
+    "bots:control": "tsx scripts/botControl.ts",
+    "import:polymarket-worldcup": "tsx scripts/importPolymarketWorldCup.ts",
+    "import:polymarket-market": "tsx scripts/importPolymarketMarket.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

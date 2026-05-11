@@ -23,6 +23,7 @@
 
 - `tightMarketMaker`: keeps both bid and ask near fair price, improves the top of book when reasonable, and refreshes stale quotes quickly
 - `inventoryAwareMaker`: keeps both sides quoted but leans prices based on current inventory so the bot does not drift too far one way
+- `dynamicMarketMaker`: builds a small bid/ask ladder from the current binary book, widens or tightens spread from live market width, and scales quoting by inventory pressure
 - `noiseTrader`: occasionally joins or crosses the spread with small size to generate fills and believable short-term price action
 
 These bots are rule-based only. There is no LLM, news inference, or external intelligence.
@@ -101,6 +102,7 @@ Useful config fields:
 - `maxPositionShares`
 - `inventoryTargetShares`
 - `inventorySkewStrength`
+- `dynamicMarketMaker`
 - `dailyNotionalPauseMode`
 
 Environment variables are optional overrides for the same defaults in `.env.example`.

@@ -1,13 +1,78 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-export type StrategyName = "tightMarketMaker" | "noiseTrader" | "inventoryAwareMaker";
+export type StrategyName = "tightMarketMaker" | "noiseTrader" | "inventoryAwareMaker" | "dynamicMarketMaker";
 export type DailyNotionalPauseMode = "pause_for_run" | "cooldown_until_utc_reset" | "cooldown_ms";
 export type SimResolverMode =
   | "random_50_50"
   | "weighted_by_last_price"
   | "forced_yes"
   | "forced_no";
+export type DynamicMarketMakerConfig = {
+  minLevelsPerSide: number;
+  maxLevelsPerSide: number;
+  levelSpacingTicks: number;
+  minSpreadTicks: number;
+  maxSpreadTicks: number;
+  baseSpreadTicks: number;
+  extremeSpreadTicks: number;
+  inventorySpreadTicks: number;
+  inventoryLeanTicks: number;
+  inventoryReduceThreshold: number;
+  inventoryEmergencyThreshold: number;
+  levelSizeMultipliers: number[];
+  extremeSizeReduction: number;
+  minLevelSize: string;
+  replenishmentTargetShares: string;
+  enableMintReplenishment: boolean;
+  targetAskDepthShares: string;
+  safetyMultiplier: number;
+  targetInventoryShares: string;
+  minMintAmount: string;
+  maxMintAmountPerCycle: string;
+  maxMintPerMarketPerHour: string;
+  extremeMintReductionThresholdHigh: number;
+  extremeMintReductionThresholdLow: number;
+  extremeMintReductionFactor: number;
+  quoteKeepBandTicks: number;
+  quoteKeepSizeToleranceRatio: number;
+  normalMarketTightenTicks: number;
+  selectiveCompetitiveTicks: number;
+  selectiveCompetitiveSizeBumpRatio: number;
+  selectiveCompetitiveMaxInventoryImbalance: number;
+  selectiveCompetitiveMinAvailableUSDC: string;
+  selectiveCompetitiveRecentLagLimit: number;
+  safeCompetitiveJoinTouchBothSides: boolean;
+  safeCompetitiveMinimumObservedSpreadTicks: number;
+};
+export type BotRiskConfig = {
+  botUserId: string | null;
+  enabled: boolean;
+  maxTotalCapitalCents: number;
+  maxCapitalPerMarketCents: number;
+  maxOpenOrderNotionalCents: number;
+  maxOrderSizeCents: number;
+  maxDailyLossCents: number;
+  maxDailySubmittedNotionalCents: number;
+  maxYesSharesPerMarket: string;
+  maxNoSharesPerMarket: string;
+  maxOrdersPerMarket: number;
+  maxQuoteLevelsPerSide: number;
+  staleDataMaxAgeMs: number;
+  pauseNearResolutionMinutes: number;
+  repeatedErrorPauseMs: number;
+  inventoryReduceOnlyThreshold: number;
+  inventoryStopThreshold: number;
+  emergencyStopOnInvariantViolation: boolean;
+  emergencyStopOnRepeatedApiErrors: boolean;
+  emergencyStopOnBalanceMismatch: boolean;
+  repeatedApiErrorThreshold: number;
+  repeatedApiErrorWindowMs: number;
+  repeatedCancelConflictThreshold: number;
+  repeatedStaleStateThreshold: number;
+  cancelOpenOrdersOnPause: boolean;
+  cancelOpenOrdersOnEmergencyStop: boolean;
+};
 export type SimConfig = {
   enabled: boolean;
   baseUrl: string;
@@ -69,6 +134,8 @@ export type BotConfig = {
   dailyNotionalCooldownMs: number;
   pausedPollIntervalMs: number;
   pauseLogIntervalMs: number;
+  dynamicMarketMaker: DynamicMarketMakerConfig;
+  risk: BotRiskConfig;
 };
 
 export type AppConfig = {
@@ -171,7 +238,7 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
       `${name}.staleOrderMs`,
     ),
     minQuoteLifetimeMs: numberField(
-      bot.minQuoteLifetimeMs ?? process.env.POLY_BOT_MIN_QUOTE_LIFETIME_MS ?? 5000,
+      bot.minQuoteLifetimeMs ?? process.env.POLY_BOT_MIN_QUOTE_LIFETIME_MS ?? 8000,
       `${name}.minQuoteLifetimeMs`,
     ),
     decisionCooldownMs: numberField(
@@ -211,11 +278,11 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
       `${name}.staleDistanceTicks`,
     ),
     replaceThresholdTicks: numberField(
-      bot.replaceThresholdTicks ?? bot.replaceHysteresisTicks ?? process.env.POLY_BOT_REPLACE_THRESHOLD_TICKS ?? 2,
+      bot.replaceThresholdTicks ?? bot.replaceHysteresisTicks ?? process.env.POLY_BOT_REPLACE_THRESHOLD_TICKS ?? 3,
       `${name}.replaceThresholdTicks`,
     ),
     replaceHysteresisTicks: numberField(
-      bot.replaceHysteresisTicks ?? bot.replaceThresholdTicks ?? process.env.POLY_BOT_REPLACE_HYSTERESIS_TICKS ?? 2,
+      bot.replaceHysteresisTicks ?? bot.replaceThresholdTicks ?? process.env.POLY_BOT_REPLACE_HYSTERESIS_TICKS ?? 3,
       `${name}.replaceHysteresisTicks`,
     ),
     maxOrdersPerSide: numberField(
@@ -253,6 +320,234 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
     pauseLogIntervalMs: numberField(
       bot.pauseLogIntervalMs ?? process.env.POLY_BOT_PAUSE_LOG_INTERVAL_MS ?? 60_000,
       `${name}.pauseLogIntervalMs`,
+    ),
+    dynamicMarketMaker: normalizeDynamicMarketMakerConfig(bot, name, {
+      maxOrderSize: stringField(
+        bot.maxOrderSize ?? process.env.POLY_BOT_MAX_ORDER_SIZE ?? "1.000000",
+        `${name}.maxOrderSize`,
+      ),
+      maxOrdersPerSide: numberField(
+        bot.maxOrdersPerSide ?? process.env.POLY_BOT_MAX_ORDERS_PER_SIDE ?? 1,
+        `${name}.maxOrdersPerSide`,
+      ),
+      targetSpreadTicks: numberField(
+        bot.targetSpreadTicks ?? process.env.POLY_BOT_TARGET_SPREAD_TICKS ?? 2,
+        `${name}.targetSpreadTicks`,
+      ),
+      inventorySkewStrength: numberField(
+        bot.inventorySkewStrength ?? process.env.POLY_BOT_INVENTORY_SKEW_STRENGTH ?? 3,
+        `${name}.inventorySkewStrength`,
+      ),
+      inventoryTargetShares: stringField(
+        bot.inventoryTargetShares ?? process.env.POLY_BOT_INVENTORY_TARGET_SHARES ?? "1.000000",
+        `${name}.inventoryTargetShares`,
+      ),
+    }),
+    risk: normalizeBotRiskConfig(bot, name, {
+      strategy: strategyField(bot.strategy, `${name}.strategy`),
+      maxOrderSize: stringField(
+        bot.maxOrderSize ?? process.env.POLY_BOT_MAX_ORDER_SIZE ?? "1.000000",
+        `${name}.maxOrderSize`,
+      ),
+      maxOpenOrders: numberField(
+        bot.maxOpenOrders ?? process.env.POLY_BOT_MAX_OPEN_ORDERS ?? 6,
+        `${name}.maxOpenOrders`,
+      ),
+      maxOrdersPerSide: numberField(
+        bot.maxOrdersPerSide ?? process.env.POLY_BOT_MAX_ORDERS_PER_SIDE ?? 1,
+        `${name}.maxOrdersPerSide`,
+      ),
+      maxPositionShares: stringField(
+        bot.maxPositionShares ?? process.env.POLY_BOT_MAX_POSITION_SHARES ?? "5.000000",
+        `${name}.maxPositionShares`,
+      ),
+      inventoryTargetShares: stringField(
+        bot.inventoryTargetShares ?? process.env.POLY_BOT_INVENTORY_TARGET_SHARES ?? "1.000000",
+        `${name}.inventoryTargetShares`,
+      ),
+      loopIntervalMaxMs: numberField(
+        bot.loopIntervalMaxMs ?? pollIntervalMs ?? process.env.POLY_BOT_LOOP_INTERVAL_MAX_MS ?? 3500,
+        `${name}.loopIntervalMaxMs`,
+      ),
+      capBackoffMs: numberField(
+        bot.capBackoffMs ?? process.env.POLY_BOT_CAP_BACKOFF_MS ?? 8000,
+        `${name}.capBackoffMs`,
+      ),
+      marketCount: stringArrayField(bot.marketIds, `${name}.marketIds`).length,
+    }),
+  };
+}
+
+function normalizeDynamicMarketMakerConfig(
+  bot: Record<string, unknown>,
+  botName: string,
+  defaults: {
+    maxOrderSize: string;
+    maxOrdersPerSide: number;
+    targetSpreadTicks: number;
+    inventorySkewStrength: number;
+    inventoryTargetShares: string;
+  },
+): DynamicMarketMakerConfig {
+  const raw =
+    bot.dynamicMarketMaker && typeof bot.dynamicMarketMaker === "object"
+      ? (bot.dynamicMarketMaker as Record<string, unknown>)
+      : {};
+
+  const minSpreadTicks = numberField(
+    raw.minSpreadTicks ?? Math.max(2, defaults.targetSpreadTicks),
+    `${botName}.dynamicMarketMaker.minSpreadTicks`,
+  );
+  const maxSpreadTicks = numberField(
+    raw.maxSpreadTicks ?? Math.max(minSpreadTicks, defaults.targetSpreadTicks + 6),
+    `${botName}.dynamicMarketMaker.maxSpreadTicks`,
+  );
+
+  if (maxSpreadTicks < minSpreadTicks) {
+    throw new Error(`${botName}.dynamicMarketMaker.maxSpreadTicks must be >= minSpreadTicks.`);
+  }
+
+  const minLevelsPerSide = integerField(
+    raw.minLevelsPerSide ?? 1,
+    `${botName}.dynamicMarketMaker.minLevelsPerSide`,
+  );
+  const maxLevelsPerSide = integerField(
+    raw.maxLevelsPerSide ?? Math.max(1, defaults.maxOrdersPerSide),
+    `${botName}.dynamicMarketMaker.maxLevelsPerSide`,
+  );
+
+  if (maxLevelsPerSide < minLevelsPerSide) {
+    throw new Error(`${botName}.dynamicMarketMaker.maxLevelsPerSide must be >= minLevelsPerSide.`);
+  }
+
+  return {
+    minLevelsPerSide,
+    maxLevelsPerSide,
+    levelSpacingTicks: integerField(
+      raw.levelSpacingTicks ?? 1,
+      `${botName}.dynamicMarketMaker.levelSpacingTicks`,
+    ),
+    minSpreadTicks,
+    maxSpreadTicks,
+    baseSpreadTicks: integerField(
+      raw.baseSpreadTicks ?? minSpreadTicks,
+      `${botName}.dynamicMarketMaker.baseSpreadTicks`,
+    ),
+    extremeSpreadTicks: integerField(
+      raw.extremeSpreadTicks ?? raw.maxSpreadExpansionTicks ?? 4,
+      `${botName}.dynamicMarketMaker.extremeSpreadTicks`,
+    ),
+    inventorySpreadTicks: integerField(
+      raw.inventorySpreadTicks ?? Math.max(1, Math.ceil(numberField(raw.inventoryLeanTicks ?? Math.max(1, defaults.inventorySkewStrength), `${botName}.dynamicMarketMaker.inventorySpreadTicksFallback`) / 2)),
+      `${botName}.dynamicMarketMaker.inventorySpreadTicks`,
+    ),
+    inventoryLeanTicks: integerField(
+      raw.inventoryLeanTicks ?? Math.max(1, defaults.inventorySkewStrength),
+      `${botName}.dynamicMarketMaker.inventoryLeanTicks`,
+    ),
+    inventoryReduceThreshold: unitIntervalField(
+      raw.inventoryReduceThreshold ?? 0.65,
+      `${botName}.dynamicMarketMaker.inventoryReduceThreshold`,
+    ),
+    inventoryEmergencyThreshold: unitIntervalField(
+      raw.inventoryEmergencyThreshold ?? 0.92,
+      `${botName}.dynamicMarketMaker.inventoryEmergencyThreshold`,
+    ),
+    levelSizeMultipliers: numberArrayField(
+      raw.levelSizeMultipliers ?? buildDefaultLevelMultipliers(maxLevelsPerSide, raw.sizeDecay),
+      `${botName}.dynamicMarketMaker.levelSizeMultipliers`,
+    ),
+    extremeSizeReduction: unitIntervalField(
+      raw.extremeSizeReduction ?? 0.55,
+      `${botName}.dynamicMarketMaker.extremeSizeReduction`,
+    ),
+    minLevelSize: stringField(
+      raw.minLevelSize ?? "0.100000",
+      `${botName}.dynamicMarketMaker.minLevelSize`,
+    ),
+    replenishmentTargetShares: stringField(
+      raw.replenishmentTargetShares ?? defaults.inventoryTargetShares,
+      `${botName}.dynamicMarketMaker.replenishmentTargetShares`,
+    ),
+    enableMintReplenishment: booleanField(
+      raw.enableMintReplenishment ?? true,
+      `${botName}.dynamicMarketMaker.enableMintReplenishment`,
+    ),
+    targetAskDepthShares: stringField(
+      raw.targetAskDepthShares ?? "100.000000",
+      `${botName}.dynamicMarketMaker.targetAskDepthShares`,
+    ),
+    safetyMultiplier: numberField(
+      raw.safetyMultiplier ?? 1.2,
+      `${botName}.dynamicMarketMaker.safetyMultiplier`,
+    ),
+    targetInventoryShares: stringField(
+      raw.targetInventoryShares ?? "300.000000",
+      `${botName}.dynamicMarketMaker.targetInventoryShares`,
+    ),
+    minMintAmount: stringField(
+      raw.minMintAmount ?? "50.000000",
+      `${botName}.dynamicMarketMaker.minMintAmount`,
+    ),
+    maxMintAmountPerCycle: stringField(
+      raw.maxMintAmountPerCycle ?? "300.000000",
+      `${botName}.dynamicMarketMaker.maxMintAmountPerCycle`,
+    ),
+    maxMintPerMarketPerHour: stringField(
+      raw.maxMintPerMarketPerHour ?? "1000.000000",
+      `${botName}.dynamicMarketMaker.maxMintPerMarketPerHour`,
+    ),
+    extremeMintReductionThresholdHigh: unitIntervalField(
+      raw.extremeMintReductionThresholdHigh ?? 0.85,
+      `${botName}.dynamicMarketMaker.extremeMintReductionThresholdHigh`,
+    ),
+    extremeMintReductionThresholdLow: unitIntervalField(
+      raw.extremeMintReductionThresholdLow ?? 0.15,
+      `${botName}.dynamicMarketMaker.extremeMintReductionThresholdLow`,
+    ),
+    extremeMintReductionFactor: unitIntervalField(
+      raw.extremeMintReductionFactor ?? 0.35,
+      `${botName}.dynamicMarketMaker.extremeMintReductionFactor`,
+    ),
+    quoteKeepBandTicks: integerField(
+      raw.quoteKeepBandTicks ?? 0,
+      `${botName}.dynamicMarketMaker.quoteKeepBandTicks`,
+    ),
+    quoteKeepSizeToleranceRatio: unitIntervalField(
+      raw.quoteKeepSizeToleranceRatio ?? 0,
+      `${botName}.dynamicMarketMaker.quoteKeepSizeToleranceRatio`,
+    ),
+    normalMarketTightenTicks: integerField(
+      raw.normalMarketTightenTicks ?? 0,
+      `${botName}.dynamicMarketMaker.normalMarketTightenTicks`,
+    ),
+    selectiveCompetitiveTicks: integerField(
+      raw.selectiveCompetitiveTicks ?? 0,
+      `${botName}.dynamicMarketMaker.selectiveCompetitiveTicks`,
+    ),
+    selectiveCompetitiveSizeBumpRatio: unitIntervalField(
+      raw.selectiveCompetitiveSizeBumpRatio ?? 0,
+      `${botName}.dynamicMarketMaker.selectiveCompetitiveSizeBumpRatio`,
+    ),
+    selectiveCompetitiveMaxInventoryImbalance: unitIntervalField(
+      raw.selectiveCompetitiveMaxInventoryImbalance ?? 0,
+      `${botName}.dynamicMarketMaker.selectiveCompetitiveMaxInventoryImbalance`,
+    ),
+    selectiveCompetitiveMinAvailableUSDC: stringField(
+      raw.selectiveCompetitiveMinAvailableUSDC ?? "0",
+      `${botName}.dynamicMarketMaker.selectiveCompetitiveMinAvailableUSDC`,
+    ),
+    selectiveCompetitiveRecentLagLimit: integerField(
+      raw.selectiveCompetitiveRecentLagLimit ?? 0,
+      `${botName}.dynamicMarketMaker.selectiveCompetitiveRecentLagLimit`,
+    ),
+    safeCompetitiveJoinTouchBothSides: booleanField(
+      raw.safeCompetitiveJoinTouchBothSides ?? false,
+      `${botName}.dynamicMarketMaker.safeCompetitiveJoinTouchBothSides`,
+    ),
+    safeCompetitiveMinimumObservedSpreadTicks: integerField(
+      raw.safeCompetitiveMinimumObservedSpreadTicks ?? 2,
+      `${botName}.dynamicMarketMaker.safeCompetitiveMinimumObservedSpreadTicks`,
     ),
   };
 }
@@ -361,6 +656,143 @@ function normalizeSimConfig(input: unknown): SimConfig {
   };
 }
 
+function normalizeBotRiskConfig(
+  bot: Record<string, unknown>,
+  botName: string,
+  defaults: {
+    strategy: StrategyName;
+    maxOrderSize: string;
+    maxOpenOrders: number;
+    maxOrdersPerSide: number;
+    maxPositionShares: string;
+    inventoryTargetShares: string;
+    loopIntervalMaxMs: number;
+    capBackoffMs: number;
+    marketCount: number;
+  },
+): BotRiskConfig {
+  const raw = bot.risk && typeof bot.risk === "object" ? (bot.risk as Record<string, unknown>) : {};
+  const inventoryTargetShares = Math.max(
+    Number(defaults.inventoryTargetShares),
+    Number(defaults.maxPositionShares),
+    1,
+  );
+  const defaultPerMarketCapitalCents = Math.max(100_000, Math.ceil(inventoryTargetShares * 200));
+  const defaultTotalCapitalCents = Math.max(500_000, defaultPerMarketCapitalCents * Math.max(1, defaults.marketCount) * 2);
+  const defaultOpenOrderNotionalCents = Math.max(
+    5_000,
+    Math.ceil(Number(defaults.maxOrderSize) * defaults.maxOpenOrders * 100),
+  );
+  const defaultDailySubmittedNotionalCents = Math.max(1_000_000, defaultPerMarketCapitalCents * 20);
+
+  return {
+    botUserId: optionalNullableStringField(
+      raw.botUserId ?? process.env.POLY_BOT_USER_ID ?? "",
+      `${botName}.risk.botUserId`,
+    ),
+    enabled: booleanField(
+      raw.enabled ?? (defaults.strategy === "noiseTrader" ? false : true),
+      `${botName}.risk.enabled`,
+    ),
+    maxTotalCapitalCents: integerField(
+      raw.maxTotalCapitalCents ?? defaultTotalCapitalCents,
+      `${botName}.risk.maxTotalCapitalCents`,
+    ),
+    maxCapitalPerMarketCents: integerField(
+      raw.maxCapitalPerMarketCents ?? defaultPerMarketCapitalCents,
+      `${botName}.risk.maxCapitalPerMarketCents`,
+    ),
+    maxOpenOrderNotionalCents: integerField(
+      raw.maxOpenOrderNotionalCents ?? defaultOpenOrderNotionalCents,
+      `${botName}.risk.maxOpenOrderNotionalCents`,
+    ),
+    maxOrderSizeCents: integerField(
+      raw.maxOrderSizeCents ?? Math.max(100, Math.ceil(Number(defaults.maxOrderSize) * 100)),
+      `${botName}.risk.maxOrderSizeCents`,
+    ),
+    maxDailyLossCents: integerField(
+      raw.maxDailyLossCents ?? defaultPerMarketCapitalCents,
+      `${botName}.risk.maxDailyLossCents`,
+    ),
+    maxDailySubmittedNotionalCents: integerField(
+      raw.maxDailySubmittedNotionalCents ?? defaultDailySubmittedNotionalCents,
+      `${botName}.risk.maxDailySubmittedNotionalCents`,
+    ),
+    maxYesSharesPerMarket: stringField(
+      raw.maxYesSharesPerMarket ?? Math.max(1, inventoryTargetShares).toFixed(6),
+      `${botName}.risk.maxYesSharesPerMarket`,
+    ),
+    maxNoSharesPerMarket: stringField(
+      raw.maxNoSharesPerMarket ?? Math.max(1, inventoryTargetShares).toFixed(6),
+      `${botName}.risk.maxNoSharesPerMarket`,
+    ),
+    maxOrdersPerMarket: integerField(
+      raw.maxOrdersPerMarket ?? Math.max(defaults.maxOpenOrders, defaults.maxOrdersPerSide * 2),
+      `${botName}.risk.maxOrdersPerMarket`,
+    ),
+    maxQuoteLevelsPerSide: integerField(
+      raw.maxQuoteLevelsPerSide ?? Math.max(1, defaults.maxOrdersPerSide),
+      `${botName}.risk.maxQuoteLevelsPerSide`,
+    ),
+    staleDataMaxAgeMs: integerField(
+      raw.staleDataMaxAgeMs ?? Math.max(15_000, defaults.loopIntervalMaxMs * 3),
+      `${botName}.risk.staleDataMaxAgeMs`,
+    ),
+    pauseNearResolutionMinutes: integerField(
+      raw.pauseNearResolutionMinutes ?? 0,
+      `${botName}.risk.pauseNearResolutionMinutes`,
+    ),
+    repeatedErrorPauseMs: integerField(
+      raw.repeatedErrorPauseMs ?? Math.max(30_000, defaults.capBackoffMs),
+      `${botName}.risk.repeatedErrorPauseMs`,
+    ),
+    inventoryReduceOnlyThreshold: unitIntervalField(
+      raw.inventoryReduceOnlyThreshold ?? 0.85,
+      `${botName}.risk.inventoryReduceOnlyThreshold`,
+    ),
+    inventoryStopThreshold: unitIntervalField(
+      raw.inventoryStopThreshold ?? 0.98,
+      `${botName}.risk.inventoryStopThreshold`,
+    ),
+    emergencyStopOnInvariantViolation: booleanField(
+      raw.emergencyStopOnInvariantViolation ?? true,
+      `${botName}.risk.emergencyStopOnInvariantViolation`,
+    ),
+    emergencyStopOnRepeatedApiErrors: booleanField(
+      raw.emergencyStopOnRepeatedApiErrors ?? true,
+      `${botName}.risk.emergencyStopOnRepeatedApiErrors`,
+    ),
+    emergencyStopOnBalanceMismatch: booleanField(
+      raw.emergencyStopOnBalanceMismatch ?? true,
+      `${botName}.risk.emergencyStopOnBalanceMismatch`,
+    ),
+    repeatedApiErrorThreshold: integerField(
+      raw.repeatedApiErrorThreshold ?? 5,
+      `${botName}.risk.repeatedApiErrorThreshold`,
+    ),
+    repeatedApiErrorWindowMs: integerField(
+      raw.repeatedApiErrorWindowMs ?? 60_000,
+      `${botName}.risk.repeatedApiErrorWindowMs`,
+    ),
+    repeatedCancelConflictThreshold: integerField(
+      raw.repeatedCancelConflictThreshold ?? 5,
+      `${botName}.risk.repeatedCancelConflictThreshold`,
+    ),
+    repeatedStaleStateThreshold: integerField(
+      raw.repeatedStaleStateThreshold ?? 10,
+      `${botName}.risk.repeatedStaleStateThreshold`,
+    ),
+    cancelOpenOrdersOnPause: booleanField(
+      raw.cancelOpenOrdersOnPause ?? false,
+      `${botName}.risk.cancelOpenOrdersOnPause`,
+    ),
+    cancelOpenOrdersOnEmergencyStop: booleanField(
+      raw.cancelOpenOrdersOnEmergencyStop ?? true,
+      `${botName}.risk.cancelOpenOrdersOnEmergencyStop`,
+    ),
+  };
+}
+
 function resolveConfigPath(cwd: string): string {
   const configPath = process.env.POLY_BOT_CONFIG ?? "./bots.json";
   const resolved = path.resolve(cwd, configPath);
@@ -419,6 +851,11 @@ function optionalStringField(value: unknown, fieldName: string): string {
   return value.trim();
 }
 
+function optionalNullableStringField(value: unknown, fieldName: string): string | null {
+  const normalized = optionalStringField(value, fieldName);
+  return normalized === "" ? null : normalized;
+}
+
 function stringArrayField(value: unknown, fieldName: string): string[] {
   if (!Array.isArray(value) || value.length === 0) {
     throw new Error(`Expected non-empty string array for ${fieldName}.`);
@@ -434,10 +871,26 @@ function numberField(value: unknown, fieldName: string): number {
   return parsed;
 }
 
+function integerField(value: unknown, fieldName: string): number {
+  const parsed = numberField(value, fieldName);
+  if (!Number.isInteger(parsed)) {
+    throw new Error(`Expected integer for ${fieldName}.`);
+  }
+  return parsed;
+}
+
 function probabilityField(value: unknown, fieldName: string): number {
   const parsed = numberField(value, fieldName);
   if (parsed > 1) {
     throw new Error(`Expected probability between 0 and 1 for ${fieldName}.`);
+  }
+  return parsed;
+}
+
+function unitIntervalField(value: unknown, fieldName: string): number {
+  const parsed = numberField(value, fieldName);
+  if (parsed > 1) {
+    throw new Error(`Expected value between 0 and 1 for ${fieldName}.`);
   }
   return parsed;
 }
@@ -465,7 +918,8 @@ function strategyField(value: unknown, fieldName: string): StrategyName {
   if (
     strategy !== "tightMarketMaker" &&
     strategy !== "noiseTrader" &&
-    strategy !== "inventoryAwareMaker"
+    strategy !== "inventoryAwareMaker" &&
+    strategy !== "dynamicMarketMaker"
   ) {
     throw new Error(`Unsupported strategy for ${fieldName}: ${strategy}`);
   }
@@ -495,4 +949,19 @@ function simResolverModeField(value: unknown, fieldName: string): SimResolverMod
 
 function intFromEnv(key: string, fallback: number): number {
   return numberField(process.env[key] ?? fallback, key);
+}
+
+function numberArrayField(value: unknown, fieldName: string): number[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw new Error(`Expected non-empty number array for ${fieldName}.`);
+  }
+
+  return value.map((item, index) => numberField(item, `${fieldName}[${index}]`));
+}
+
+function buildDefaultLevelMultipliers(maxLevelsPerSide: number, legacySizeDecay: unknown): number[] {
+  const decay = legacySizeDecay === undefined ? 0.7 : unitIntervalField(legacySizeDecay, "dynamicMarketMaker.sizeDecay");
+  return Array.from({ length: Math.max(1, maxLevelsPerSide) }, (_, index) =>
+    Math.round(Math.pow(decay, index) * 1_000) / 1_000,
+  );
 }

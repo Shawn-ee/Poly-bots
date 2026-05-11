@@ -2,15 +2,20 @@ import { ApiClient, PolyApiError } from "../api/apiClient.js";
 import { Order, Quote } from "../api/types.js";
 import { BotConfig } from "../config/loadConfig.js";
 import { BotLogger } from "../logging/logger.js";
-import { inventoryAwareMakerStrategy } from "../strategies/inventoryAwareMaker.js";
-import { noiseTraderStrategy } from "../strategies/noiseTrader.js";
+import {
+  dynamicMarketMakerStrategy,
+  planDynamicMarketMakerMintReplenishment,
+} from "../strategies/liquidity/dynamicMarketMaker.js";
+import { inventoryAwareMakerStrategy } from "../strategies/liquidity/inventoryAwareMaker.js";
+import { noiseTraderStrategy } from "../strategies/userSimulation/noiseTrader.js";
 import {
   collectStaleCleanupActions,
+  getStrategyCategory,
   sampleLoopDelayMs,
   StrategyAction,
   StrategyContext,
-} from "../strategies/common.js";
-import { tightMarketMakerStrategy } from "../strategies/tightMarketMaker.js";
+} from "../strategies/shared/common.js";
+import { tightMarketMakerStrategy } from "../strategies/liquidity/tightMarketMaker.js";
 import { sleep } from "../utils/sleep.js";
 import {
   BotBlockState,
@@ -18,14 +23,24 @@ import {
   nextTransportBackoffMs,
   resetTransportBackoff,
 } from "./errorHandling.js";
+import { decimalToUnits, unitsToDecimal } from "../utils/decimal.js";
+import { RuntimeStateSync } from "./runtimeStateSync.js";
+import { BotRiskManager, PlacementRiskContext, RiskEvaluation } from "./botRiskManager.js";
 
 type StrategyFn = (context: StrategyContext) => StrategyAction[];
 
 export class BotRunner {
   private readonly api: ApiClient;
   private readonly logger: BotLogger;
+  private readonly strategyCategory: ReturnType<typeof getStrategyCategory>;
+  private readonly stateSync: RuntimeStateSync;
+  private readonly riskManager: BotRiskManager;
+  private runtimeController: AbortController | null = null;
+  private runtimeInitPromise: Promise<void> | null = null;
   private readonly seenFillIds = new Set<string>();
   private readonly lastPlacementByKey = new Map<string, number>();
+  private readonly marketMintHistory = new Map<string, Array<{ ts: number; amount: string }>>();
+  private readonly marketQuoteLagHistory = new Map<string, number[]>();
   private placementBlock: BotBlockState = { kind: "none" };
   private transportBackoffMs = 0;
   private lastPauseSkipLogAt = 0;
@@ -33,14 +48,20 @@ export class BotRunner {
   constructor(private readonly bot: BotConfig, logsDir: string) {
     this.api = new ApiClient(bot.baseUrl, bot.apiKey);
     this.logger = new BotLogger(bot.name, logsDir);
+    this.strategyCategory = getStrategyCategory(bot.strategy);
+    this.stateSync = new RuntimeStateSync(bot, this.api, this.logger);
+    this.riskManager = new BotRiskManager(bot, this.strategyCategory, this.api, this.logger);
   }
 
   async run(signal: AbortSignal): Promise<void> {
     this.logger.info("bot_starting", {
       strategy: this.bot.strategy,
+      strategyCategory: this.strategyCategory,
       marketIds: this.bot.marketIds,
       baseUrl: this.bot.baseUrl,
     });
+
+    await this.ensureRuntimeState(signal);
 
     while (!signal.aborted) {
       try {
@@ -60,10 +81,21 @@ export class BotRunner {
     }
 
     this.logger.info("bot_stopping");
+    this.shutdown();
+  }
+
+  async runOnce(signal: AbortSignal): Promise<void> {
+    await this.runCycle(signal);
+  }
+
+  shutdown() {
+    this.runtimeController?.abort();
     this.logger.close();
   }
 
   private async runCycle(signal: AbortSignal) {
+    await this.ensureRuntimeState(signal);
+
     if (signal.aborted) {
       return;
     }
@@ -73,40 +105,70 @@ export class BotRunner {
       return;
     }
 
-    const [balance, positions, fillsPage, openOrdersPage] = await Promise.all([
-      this.api.getBalance(),
-      this.api.getPositions(),
-      this.api.getFills({ limit: 25 }),
-      this.api.getOrders({
-        status: ["OPEN", "PARTIAL"],
-        limit: 100,
-      }),
-    ]);
+    let { balance, positions, fillsPage, openOrdersPage } = await this.stateSync.getAccountSnapshot(signal);
     let openOrders = openOrdersPage.items;
 
     for (const fill of fillsPage.items) {
       if (!this.seenFillIds.has(fill.id)) {
         this.seenFillIds.add(fill.id);
         this.logger.info("fill_seen", fill);
+        this.riskManager.noteFill(fill);
       }
     }
 
     for (const marketId of this.bot.marketIds) {
-      const quoteResponse = await this.api.getQuote(marketId);
+      let quoteResponse = await this.stateSync.getMarketQuote(marketId);
+      const freshness = this.stateSync.getFreshnessMetrics(marketId);
+      if (!quoteResponse.quotes.length) {
+        this.riskManager.noteRiskSkip("stale_state_unavailable_skip");
+        this.logger.warn("order_submit_skipped", {
+          marketId,
+          reason: "stale_state_unavailable_skip",
+          strategyCategory: this.strategyCategory,
+          freshness,
+        });
+        continue;
+      }
+      if (this.bot.strategy === "dynamicMarketMaker") {
+        const refreshed = await this.maybeReplenishDynamicMarketMakerInventory({
+          marketId,
+          quoteResponse,
+          balance,
+          positions,
+        });
+        if (refreshed) {
+          balance = refreshed.balance;
+          positions = refreshed.positions;
+          quoteResponse = refreshed.quoteResponse;
+        }
+      }
 
       for (const quote of quoteResponse.quotes) {
         const marketOpenOrders = openOrders.filter((order) => order.marketId === marketId);
         const outcomeOpenOrders = marketOpenOrders.filter((order) => order.outcomeId === quote.outcomeId);
+        const riskEvaluation = await this.riskManager.evaluateMarket({
+          marketId,
+          balance,
+          positions: positions.items,
+          openOrders,
+          quoteResponse,
+          freshness,
+        });
+        if (this.riskManager.shouldCancelAllOpenOrders()) {
+          openOrders = await this.cancelAllOpenOrders(openOrders);
+        }
         const context: StrategyContext = {
           bot: this.bot,
           marketId,
           quote,
+          marketQuotes: quoteResponse.quotes,
           balance,
           positions: positions.items,
           totalOpenOrders: openOrders,
           marketOpenOrders,
           outcomeOpenOrders,
           now: new Date(),
+          recentQuoteLagEvents: this.getRecentQuoteLagEvents(marketId),
         };
 
         this.logger.info("quote_seen", {
@@ -118,19 +180,107 @@ export class BotRunner {
           lastPrice: quote.lastPrice,
           totalOpenOrders: openOrders.length,
           maxOpenOrders: this.bot.maxOpenOrders,
+          freshness,
         });
 
         const activeBlock = this.resolvePlacementBlock(Date.now());
-        const actions = activeBlock
-          ? collectStaleCleanupActions(context)
-          : this.selectStrategy()(context);
+        const actions =
+          activeBlock || riskEvaluation.state === "paused" || riskEvaluation.state === "emergency_stop"
+            ? collectStaleCleanupActions(context)
+            : this.selectStrategy()(context);
 
         if (activeBlock) {
           this.logPlacementBlockSkip(marketId, quote.outcomeId, activeBlock, openOrders.length);
         }
+        if (riskEvaluation.state === "paused") {
+          this.logger.warn("order_submit_skipped", {
+            marketId,
+            outcomeId: quote.outcomeId,
+            reason: "near_resolution_pause",
+            riskState: riskEvaluation.state,
+            riskReason: riskEvaluation.reason,
+          });
+        }
+        if (riskEvaluation.state === "reduce_only") {
+          this.logger.warn("reduce_only_entered", {
+            marketId,
+            botUserId: this.bot.risk.botUserId,
+            inventory: {
+              yesShares: riskEvaluation.market.yesShares.toFixed(6),
+              noShares: riskEvaluation.market.noShares.toFixed(6),
+            },
+            exposure: riskEvaluation.market.exposureCents,
+            openOrderNotional: riskEvaluation.market.openOrderNotionalCents,
+            reason: riskEvaluation.reason,
+          });
+        }
 
-        openOrders = await this.executeActions(actions, marketId, quote, openOrders, signal);
+        openOrders = await this.executeActions(
+          actions,
+          marketId,
+          quote,
+          quoteResponse,
+          { balance, positions: positions.items, freshness, riskEvaluation },
+          openOrders,
+          signal,
+        );
       }
+    }
+  }
+
+  private async maybeReplenishDynamicMarketMakerInventory(params: {
+    marketId: string;
+    quoteResponse: Awaited<ReturnType<ApiClient["getQuote"]>>;
+    balance: Awaited<ReturnType<ApiClient["getBalance"]>>;
+    positions: Awaited<ReturnType<ApiClient["getPositions"]>>;
+  }) {
+    const mintedLastHour = this.getMintedLastHour(params.marketId);
+    const plan = planDynamicMarketMakerMintReplenishment({
+      bot: this.bot,
+      marketId: params.marketId,
+      marketQuotes: params.quoteResponse.quotes,
+      positions: params.positions.items,
+      availableUSDC: params.balance.availableUSDC,
+      mintedLastHour,
+    });
+
+    if (!plan.shouldConsider) {
+      return null;
+    }
+
+    this.logger.info("mint_replenishment_considered", plan);
+
+    if (!plan.shouldMint) {
+      this.logger.info("mint_replenishment_skipped", plan);
+      return null;
+    }
+
+    try {
+      const result = await this.api.mintCompleteSet(params.marketId, plan.finalMintAmount);
+      this.recordMint(params.marketId, plan.finalMintAmount);
+      this.logger.info("mint_replenishment_success", {
+        ...plan,
+        response: result,
+      });
+
+      const [balance, positions, quoteResponse] = await Promise.all([
+        this.api.getBalance(),
+        this.api.getPositions(),
+        this.api.getQuote(params.marketId),
+      ]);
+
+      return {
+        balance,
+        positions,
+        quoteResponse,
+      };
+    } catch (error) {
+      const serialized = serializeError(error);
+      this.logger.warn("mint_replenishment_failed", {
+        ...plan,
+        ...serialized,
+      });
+      return null;
     }
   }
 
@@ -138,6 +288,13 @@ export class BotRunner {
     actions: StrategyAction[],
     marketId: string,
     quote: Quote,
+    quoteResponse: Awaited<ReturnType<ApiClient["getQuote"]>>,
+    runtimeState: {
+      balance: Awaited<ReturnType<ApiClient["getBalance"]>>;
+      positions: Awaited<ReturnType<ApiClient["getPositions"]>>["items"];
+      freshness: ReturnType<RuntimeStateSync["getFreshnessMetrics"]>;
+      riskEvaluation: RiskEvaluation;
+    },
     openOrders: Order[],
     signal: AbortSignal,
   ): Promise<Order[]> {
@@ -153,6 +310,10 @@ export class BotRunner {
         try {
           const result = await this.api.cancelOrder(action.orderId);
           nextOpenOrders = nextOpenOrders.filter((order) => order.id !== action.orderId);
+          this.riskManager.noteCancel();
+          if (action.reason === "stale_order_cleanup" || action.reason === "side_order_limit_cleanup") {
+            this.recordQuoteLag(marketId);
+          }
           this.logger.info("order_canceled", {
             orderId: action.orderId,
             reason: action.reason,
@@ -166,6 +327,10 @@ export class BotRunner {
             orderId: action.orderId,
             reason: action.reason,
             ...serializeError(error),
+          });
+          this.riskManager.noteApiError(error, {
+            stage: "cancel_order",
+            marketId,
           });
         }
         continue;
@@ -233,6 +398,42 @@ export class BotRunner {
         ...(action.details ? action.details : {}),
       });
 
+      const placementDecision = this.riskManager.checkPlacement({
+        marketId,
+        outcomeId: quote.outcomeId,
+        action,
+        balance: runtimeState.balance,
+        positions: runtimeState.positions,
+        openOrders: nextOpenOrders,
+        quote,
+        marketQuotes: quoteResponse.quotes,
+        freshness: runtimeState.freshness,
+        evaluation: runtimeState.riskEvaluation,
+      } satisfies PlacementRiskContext);
+      if (!placementDecision.allow) {
+        this.riskManager.noteRiskSkip(placementDecision.reason);
+        this.logger.warn("risk_check_failed", {
+          marketId,
+          botUserId: this.bot.risk.botUserId,
+          side: action.side,
+          reason: placementDecision.reason,
+          ...placementDecision.details,
+        });
+        if (placementDecision.reason === "max_per_market_exposure" || placementDecision.reason === "max_total_capital") {
+          this.logger.warn("max_exposure_reached", placementDecision.details);
+        }
+        if (placementDecision.reason === "reduce_only") {
+          this.logger.warn("inventory_limit_hit", placementDecision.details);
+        }
+        if (placementDecision.reason === "max_yes_inventory" || placementDecision.reason === "max_no_inventory") {
+          this.logger.warn("inventory_limit_hit", placementDecision.details);
+        }
+        if (placementDecision.reason.includes("stale")) {
+          this.logger.warn("stale_state_skip", placementDecision.details);
+        }
+        continue;
+      }
+
       try {
         this.logger.info("order_submission", {
           idempotencyKey: action.idempotencyKey,
@@ -298,10 +499,46 @@ export class BotRunner {
         } else {
           this.logger.error("error", logPayload);
         }
+        this.riskManager.noteApiError(error, {
+          stage: "place_order",
+          marketId,
+        });
       }
     }
 
     return nextOpenOrders;
+  }
+
+  private async cancelAllOpenOrders(openOrders: Order[]): Promise<Order[]> {
+    if (openOrders.length === 0) {
+      return openOrders;
+    }
+    let remaining = [...openOrders];
+    for (const order of openOrders) {
+      try {
+        const result = await this.api.cancelOrder(order.id);
+        remaining = remaining.filter((item) => item.id !== order.id);
+        this.riskManager.noteCancel();
+        this.logger.warn("order_canceled", {
+          orderId: order.id,
+          reason: "emergency_stop_cancel_all",
+          totalOpenOrders: remaining.length,
+          order: result.order,
+        });
+      } catch (error) {
+        this.logger.warn("error", {
+          stage: "cancel_order",
+          orderId: order.id,
+          reason: "emergency_stop_cancel_all",
+          ...serializeError(error),
+        });
+        this.riskManager.noteApiError(error, {
+          stage: "cancel_order",
+          marketId: order.marketId,
+        });
+      }
+    }
+    return remaining;
   }
 
   private resolvePlacementBlock(now: number): { reason: string; code?: string } | null {
@@ -382,7 +619,58 @@ export class BotRunner {
         return noiseTraderStrategy;
       case "inventoryAwareMaker":
         return inventoryAwareMakerStrategy;
+      case "dynamicMarketMaker":
+        return dynamicMarketMakerStrategy;
     }
+  }
+
+  private getMintedLastHour(marketId: string): string {
+    const now = Date.now();
+    const retained = (this.marketMintHistory.get(marketId) ?? []).filter(
+      (entry) => entry.ts > now - 60 * 60 * 1000,
+    );
+    this.marketMintHistory.set(marketId, retained);
+    let total = 0n;
+    for (const entry of retained) {
+      total += decimalToUnits(entry.amount);
+    }
+    return unitsToDecimal(total);
+  }
+
+  private recordMint(marketId: string, amount: string) {
+    const retained = (this.marketMintHistory.get(marketId) ?? []).filter(
+      (entry) => entry.ts > Date.now() - 60 * 60 * 1000,
+    );
+    retained.push({ ts: Date.now(), amount });
+    this.marketMintHistory.set(marketId, retained);
+  }
+
+  private recordQuoteLag(marketId: string) {
+    const now = Date.now();
+    const history = this.marketQuoteLagHistory.get(marketId) ?? [];
+    history.push(now);
+    this.marketQuoteLagHistory.set(
+      marketId,
+      history.filter((ts) => now - ts <= 5 * 60_000),
+    );
+  }
+
+  private getRecentQuoteLagEvents(marketId: string): number {
+    const now = Date.now();
+    const history = (this.marketQuoteLagHistory.get(marketId) ?? []).filter((ts) => now - ts <= 5 * 60_000);
+    this.marketQuoteLagHistory.set(marketId, history);
+    return history.length;
+  }
+
+  private async ensureRuntimeState(signal: AbortSignal) {
+    if (this.runtimeInitPromise) {
+      return this.runtimeInitPromise;
+    }
+
+    this.runtimeController = new AbortController();
+    signal.addEventListener("abort", () => this.runtimeController?.abort(), { once: true });
+    this.runtimeInitPromise = this.stateSync.start(this.runtimeController.signal);
+    return this.runtimeInitPromise;
   }
 }
 
