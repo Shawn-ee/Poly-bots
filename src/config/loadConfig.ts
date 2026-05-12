@@ -1,13 +1,32 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-export type StrategyName = "tightMarketMaker" | "noiseTrader" | "inventoryAwareMaker" | "dynamicMarketMaker";
+export type StrategyName =
+  | "tightMarketMaker"
+  | "noiseTrader"
+  | "inventoryAwareMaker"
+  | "dynamicMarketMaker"
+  | "referenceAwareSystemLiquidity";
 export type DailyNotionalPauseMode = "pause_for_run" | "cooldown_until_utc_reset" | "cooldown_ms";
 export type SimResolverMode =
   | "random_50_50"
   | "weighted_by_last_price"
   | "forced_yes"
   | "forced_no";
+export type ReferenceAwareSystemLiquidityConfig = {
+  referencePollMs: number;
+  referenceStaleMs: number;
+  liquidityBotCycleMs: number;
+  quoteOffsetTicks: number;
+  minReferenceSpread: number;
+  maxReferenceSpread: number;
+  minReferenceLiquidity: number | null;
+  minVolume24hr: number | null;
+  cancelOnReferenceStale: boolean;
+  cancelOnReferenceWide: boolean;
+  dryRun: boolean;
+  explicitBotTradable: boolean;
+};
 export type DynamicMarketMakerConfig = {
   minLevelsPerSide: number;
   maxLevelsPerSide: number;
@@ -100,6 +119,10 @@ export type SimConfig = {
   emitJsonSummary: boolean;
 };
 
+export type RuntimeGuardsConfig = {
+  allowUserSimulationInProduction: boolean;
+};
+
 export type BotConfig = {
   name: string;
   baseUrl: string;
@@ -134,6 +157,7 @@ export type BotConfig = {
   dailyNotionalCooldownMs: number;
   pausedPollIntervalMs: number;
   pauseLogIntervalMs: number;
+  referenceAwareSystemLiquidity: ReferenceAwareSystemLiquidityConfig;
   dynamicMarketMaker: DynamicMarketMakerConfig;
   risk: BotRiskConfig;
 };
@@ -141,6 +165,7 @@ export type BotConfig = {
 export type AppConfig = {
   configPath: string;
   startupStaggerMs: number;
+  runtimeGuards: RuntimeGuardsConfig;
   bots: BotConfig[];
   sim: SimConfig;
 };
@@ -166,12 +191,20 @@ export function loadConfig(
     throw new Error("Bot config file contains no bots.");
   }
 
-  return {
+  const config = {
     configPath,
     startupStaggerMs: intFromEnv("POLY_BOT_STARTUP_STAGGER_MS", 750),
+    runtimeGuards: {
+      allowUserSimulationInProduction: booleanField(
+        process.env.ALLOW_USER_SIMULATION_IN_PRODUCTION ?? false,
+        "ALLOW_USER_SIMULATION_IN_PRODUCTION",
+      ),
+    },
     bots,
     sim: normalizeSimConfig(simValue),
   };
+  assertProductionConfigGuards(config);
+  return config;
 }
 
 function normalizeRootConfig(raw: unknown): { botValues: unknown[]; simValue: unknown } {
@@ -321,6 +354,7 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
       bot.pauseLogIntervalMs ?? process.env.POLY_BOT_PAUSE_LOG_INTERVAL_MS ?? 60_000,
       `${name}.pauseLogIntervalMs`,
     ),
+    referenceAwareSystemLiquidity: normalizeReferenceAwareSystemLiquidityConfig(bot, name),
     dynamicMarketMaker: normalizeDynamicMarketMakerConfig(bot, name, {
       maxOrderSize: stringField(
         bot.maxOrderSize ?? process.env.POLY_BOT_MAX_ORDER_SIZE ?? "1.000000",
@@ -548,6 +582,67 @@ function normalizeDynamicMarketMakerConfig(
     safeCompetitiveMinimumObservedSpreadTicks: integerField(
       raw.safeCompetitiveMinimumObservedSpreadTicks ?? 2,
       `${botName}.dynamicMarketMaker.safeCompetitiveMinimumObservedSpreadTicks`,
+    ),
+  };
+}
+
+function normalizeReferenceAwareSystemLiquidityConfig(
+  bot: Record<string, unknown>,
+  botName: string,
+): ReferenceAwareSystemLiquidityConfig {
+  const raw =
+    bot.referenceAwareSystemLiquidity && typeof bot.referenceAwareSystemLiquidity === "object"
+      ? (bot.referenceAwareSystemLiquidity as Record<string, unknown>)
+      : {};
+
+  return {
+    referencePollMs: integerField(
+      raw.referencePollMs ?? process.env.POLY_REFERENCE_POLL_MS ?? 5_000,
+      `${botName}.referenceAwareSystemLiquidity.referencePollMs`,
+    ),
+    referenceStaleMs: integerField(
+      raw.referenceStaleMs ?? process.env.POLY_REFERENCE_STALE_MS ?? 15_000,
+      `${botName}.referenceAwareSystemLiquidity.referenceStaleMs`,
+    ),
+    liquidityBotCycleMs: integerField(
+      raw.liquidityBotCycleMs ?? process.env.POLY_REFERENCE_LIQUIDITY_CYCLE_MS ?? 1_500,
+      `${botName}.referenceAwareSystemLiquidity.liquidityBotCycleMs`,
+    ),
+    quoteOffsetTicks: integerField(
+      raw.quoteOffsetTicks ?? process.env.POLY_REFERENCE_QUOTE_OFFSET_TICKS ?? 2,
+      `${botName}.referenceAwareSystemLiquidity.quoteOffsetTicks`,
+    ),
+    minReferenceSpread: numberField(
+      raw.minReferenceSpread ?? process.env.POLY_REFERENCE_MIN_SPREAD ?? 0,
+      `${botName}.referenceAwareSystemLiquidity.minReferenceSpread`,
+    ),
+    maxReferenceSpread: numberField(
+      raw.maxReferenceSpread ?? process.env.POLY_REFERENCE_MAX_SPREAD ?? 0.1,
+      `${botName}.referenceAwareSystemLiquidity.maxReferenceSpread`,
+    ),
+    minReferenceLiquidity: nullableNumberField(
+      raw.minReferenceLiquidity ?? process.env.POLY_REFERENCE_MIN_LIQUIDITY,
+      `${botName}.referenceAwareSystemLiquidity.minReferenceLiquidity`,
+    ),
+    minVolume24hr: nullableNumberField(
+      raw.minVolume24hr ?? process.env.POLY_REFERENCE_MIN_VOLUME_24HR,
+      `${botName}.referenceAwareSystemLiquidity.minVolume24hr`,
+    ),
+    cancelOnReferenceStale: booleanField(
+      raw.cancelOnReferenceStale ?? process.env.POLY_REFERENCE_CANCEL_ON_STALE ?? true,
+      `${botName}.referenceAwareSystemLiquidity.cancelOnReferenceStale`,
+    ),
+    cancelOnReferenceWide: booleanField(
+      raw.cancelOnReferenceWide ?? process.env.POLY_REFERENCE_CANCEL_ON_WIDE ?? true,
+      `${botName}.referenceAwareSystemLiquidity.cancelOnReferenceWide`,
+    ),
+    dryRun: booleanField(
+      raw.dryRun ?? process.env.SYSTEM_LIQUIDITY_DRY_RUN ?? true,
+      `${botName}.referenceAwareSystemLiquidity.dryRun`,
+    ),
+    explicitBotTradable: booleanField(
+      raw.explicitBotTradable ?? process.env.POLY_REFERENCE_EXPLICIT_BOT_TRADABLE ?? false,
+      `${botName}.referenceAwareSystemLiquidity.explicitBotTradable`,
     ),
   };
 }
@@ -919,7 +1014,8 @@ function strategyField(value: unknown, fieldName: string): StrategyName {
     strategy !== "tightMarketMaker" &&
     strategy !== "noiseTrader" &&
     strategy !== "inventoryAwareMaker" &&
-    strategy !== "dynamicMarketMaker"
+    strategy !== "dynamicMarketMaker" &&
+    strategy !== "referenceAwareSystemLiquidity"
   ) {
     throw new Error(`Unsupported strategy for ${fieldName}: ${strategy}`);
   }
@@ -959,9 +1055,40 @@ function numberArrayField(value: unknown, fieldName: string): number[] {
   return value.map((item, index) => numberField(item, `${fieldName}[${index}]`));
 }
 
+function nullableNumberField(value: unknown, fieldName: string): number | null {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+  return numberField(value, fieldName);
+}
+
 function buildDefaultLevelMultipliers(maxLevelsPerSide: number, legacySizeDecay: unknown): number[] {
   const decay = legacySizeDecay === undefined ? 0.7 : unitIntervalField(legacySizeDecay, "dynamicMarketMaker.sizeDecay");
   return Array.from({ length: Math.max(1, maxLevelsPerSide) }, (_, index) =>
     Math.round(Math.pow(decay, index) * 1_000) / 1_000,
   );
+}
+
+export function assertProductionConfigGuards(config: AppConfig) {
+  if (process.env.NODE_ENV !== "production") {
+    return;
+  }
+  if (config.runtimeGuards.allowUserSimulationInProduction) {
+    return;
+  }
+
+  const simulationBots = config.bots.filter((bot) => bot.strategy === "noiseTrader");
+  if (simulationBots.length > 0) {
+    throw new Error(
+      `User simulation bots are disabled in production unless ALLOW_USER_SIMULATION_IN_PRODUCTION=true. Blocked bots: ${simulationBots
+        .map((bot) => bot.name)
+        .join(", ")}`,
+    );
+  }
+
+  if (config.sim.enabled) {
+    throw new Error(
+      "Sim orchestrator is disabled in production unless ALLOW_USER_SIMULATION_IN_PRODUCTION=true.",
+    );
+  }
 }

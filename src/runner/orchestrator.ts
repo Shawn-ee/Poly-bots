@@ -3,6 +3,7 @@ import path from "node:path";
 import { AppConfig } from "../config/loadConfig.js";
 import { sleep } from "../utils/sleep.js";
 import { BotRunner } from "./botRunner.js";
+import { ReferenceAwareSystemLiquidityBot } from "./referenceAwareSystemLiquidityBot.js";
 
 export async function runOrchestrator(config: AppConfig): Promise<void> {
   const controller = new AbortController();
@@ -15,7 +16,10 @@ export async function runOrchestrator(config: AppConfig): Promise<void> {
 
   try {
     const tasks = config.bots.map(async (bot, index) => {
-      const runner = new BotRunner(bot, logsDir);
+      const runner =
+        bot.strategy === "referenceAwareSystemLiquidity"
+          ? new ReferenceAwareSystemLiquidityBot(bot, logsDir)
+          : new BotRunner(bot, logsDir);
       if (index > 0) {
         await sleep(config.startupStaggerMs * index, controller.signal).catch(() => undefined);
       }

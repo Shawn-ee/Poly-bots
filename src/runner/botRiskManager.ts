@@ -349,6 +349,18 @@ export class BotRiskManager {
           this.marketMetadata.set(market.id, market);
         }
       }
+      const missing = this.bot.marketIds.filter((marketId) => !this.marketMetadata.has(marketId));
+      for (const marketId of missing) {
+        try {
+          const detail = await this.api.getMarket(marketId);
+          this.marketMetadata.set(marketId, detail.market);
+        } catch (error) {
+          this.logger.warn("risk_market_detail_refresh_failed", {
+            marketId,
+            message: error instanceof Error ? error.message : String(error),
+          });
+        }
+      }
     } catch (error) {
       this.logger.warn("risk_market_metadata_refresh_failed", {
         message: error instanceof Error ? error.message : String(error),

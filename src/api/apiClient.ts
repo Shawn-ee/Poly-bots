@@ -14,6 +14,7 @@ import {
   CursorPage,
   EventStreamEnvelope,
   Fill,
+  GetMarketResponse,
   GetOrderResponse,
   LedgerEntry,
   MarketStreamEvent,
@@ -107,6 +108,10 @@ export class ApiClient {
       `/api/markets/${encodeURIComponent(marketId)}/quote`,
       outcomeId ? { query: { outcomeId } } : {},
     );
+  }
+
+  async getMarket(marketId: string): Promise<GetMarketResponse> {
+    return this.request(`/api/markets/${encodeURIComponent(marketId)}`);
   }
 
   async getBalance(): Promise<Balance> {

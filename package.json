@@ -20,6 +20,7 @@
     "test:dynamic-market-maker": "tsx scripts/testDynamicMarketMaker.ts",
     "test:production-risk-controls": "npm run build && node scripts/testProductionRiskControls.mjs",
     "test:reference-market-import": "tsx scripts/testReferenceMarketImport.ts",
+    "test:reference-liquidity": "tsx --test src/referenceMarket/__tests__/referencePriceCache.test.ts src/strategies/liquidity/__tests__/quotePlanner.test.ts src/config/__tests__/productionGuards.test.ts",
     "investigate:polymarket-worldcup-top20": "tsx scripts/investigatePolymarketWorldCupTopActive.ts",
     "investigate:polymarket-soccer-top20": "tsx scripts/investigatePolymarketSoccerTopActive.ts",
     "inspect:polymarket-market": "tsx scripts/inspectPolymarketMarket.ts",
@@ -27,7 +28,8 @@
     "bots:restart-clean": "tsx scripts/botsReset.ts --restart",
     "bots:control": "tsx scripts/botControl.ts",
     "import:polymarket-worldcup": "tsx scripts/importPolymarketWorldCup.ts",
-    "import:polymarket-market": "tsx scripts/importPolymarketMarket.ts"
+    "import:polymarket-market": "tsx scripts/importPolymarketMarket.ts",
+    "liquidity:reference-dry-run": "tsx src/runner/referenceAwareDryRun.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

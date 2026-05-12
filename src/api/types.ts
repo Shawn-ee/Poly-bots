@@ -16,20 +16,48 @@ export type MarketSummary = {
   title: string;
   description?: string;
   status: string;
+  type?: string;
+  kind?: string;
   mechanism: string;
   visibility: string;
+  isListed?: boolean;
   resolveTime?: string | null;
   resolvedOutcomeId?: string | null;
   createdAt?: string;
+  externalMarketId?: string | null;
+  conditionId?: string | null;
+  referenceSource?: string | null;
+  externalSlug?: string | null;
+  importStatus?: string | null;
+  referenceOnly?: boolean | null;
+  tradable?: boolean | null;
+  mmEnabled?: boolean | null;
   tags?: MarketTag[];
-  outcomes: Array<{ id: string; name: string }>;
+  outcomes: Array<{
+    id: string;
+    name: string;
+    displayOrder?: number;
+    isTradable?: boolean;
+    referenceTokenId?: string | null;
+    referenceOutcomeLabel?: string | null;
+  }>;
   prices?: Record<string, number>;
   pricesByOutcome?: Record<string, number>;
+};
+
+export type MarketDetail = MarketSummary & {
+  ownerId?: string | null;
+  isCanceled?: boolean;
+  betCloseTime?: string | null;
 };
 
 export type QuoteResponse = {
   marketId: string;
   quotes: Quote[];
+};
+
+export type GetMarketResponse = {
+  market: MarketDetail;
 };
 
 export type Quote = {

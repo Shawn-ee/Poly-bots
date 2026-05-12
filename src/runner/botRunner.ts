@@ -621,6 +621,8 @@ export class BotRunner {
         return inventoryAwareMakerStrategy;
       case "dynamicMarketMaker":
         return dynamicMarketMakerStrategy;
+      case "referenceAwareSystemLiquidity":
+        throw new Error("referenceAwareSystemLiquidity must use ReferenceAwareSystemLiquidityBot.");
     }
   }
 
