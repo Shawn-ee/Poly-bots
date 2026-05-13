@@ -231,6 +231,81 @@ export type AdminImportReferenceMarketResponse = {
   outcomeIds: string[];
 };
 
+export type AdminReferenceMarketOutcome = {
+  id: string;
+  name: string;
+  displayOrder: number;
+  isTradable: boolean;
+  referenceTokenId: string | null;
+  referenceOutcomeLabel: string | null;
+  referenceMetadata: unknown;
+};
+
+export type AdminReferenceMarketItem = {
+  id: string;
+  title: string;
+  description: string | null;
+  status: string;
+  isListed: boolean;
+  event: {
+    id: string;
+    slug: string | null;
+    title: string;
+    category: string | null;
+    source: string | null;
+    externalEventId: string | null;
+    externalSlug: string | null;
+  } | null;
+  externalMarketId: string | null;
+  externalSlug: string | null;
+  conditionId: string | null;
+  referenceSource: string | null;
+  importStatus: "pending_review" | "approved" | "rejected" | null;
+  referenceOnly: boolean | null;
+  tradable: boolean | null;
+  mmEnabled: boolean | null;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+  outcomePrices: unknown;
+  bestBid: unknown;
+  bestAsk: unknown;
+  spread: unknown;
+  lastTradePrice: unknown;
+  volume24hr: unknown;
+  liquidity: unknown;
+  acceptingOrders: unknown;
+  referenceMetadata: unknown;
+  outcomes: AdminReferenceMarketOutcome[];
+};
+
+export type AdminReferenceMarketsResponse = {
+  items: AdminReferenceMarketItem[];
+};
+
+export type AdminUpdateReferenceMarketRequest = {
+  action?: "approve" | "reject" | "reset";
+  importStatus?: "pending_review" | "approved" | "rejected";
+  referenceOnly?: boolean;
+  tradable?: boolean;
+  mmEnabled?: boolean;
+  isListed?: boolean;
+  reviewNotes?: string;
+};
+
+export type AdminUpdateReferenceMarketResponse = {
+  ok: boolean;
+  marketId: string;
+  importStatus: "pending_review" | "approved" | "rejected";
+  referenceOnly: boolean;
+  tradable: boolean;
+  mmEnabled: boolean;
+  isListed: boolean;
+  reviewedAt: string | null;
+  reviewedBy: string | null;
+  reviewNotes: string | null;
+};
+
 export type AdminMarketStatus = "UPCOMING" | "LIVE" | "CLOSED" | "RESOLVED" | "ACTIVE" | "PAUSED" | "CANCELED";
 
 export type AdminMarketStatusResponse = {

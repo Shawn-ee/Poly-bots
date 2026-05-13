@@ -136,6 +136,7 @@ export function normalizeGammaMarket(input: GammaMarketWire): ReferenceMarketCan
     bestAsk: asNumber(input.bestAsk),
     spread: asNumber(input.spread),
     lastTradePrice: asNumber(input.lastTradePrice),
+    updatedAt: asIsoString(input.updatedAt ?? input.updated_at),
     image: asString(input.image),
     icon: asString(input.icon),
     outcomePrices,

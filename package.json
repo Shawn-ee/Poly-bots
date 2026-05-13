@@ -20,6 +20,8 @@
     "test:dynamic-market-maker": "tsx scripts/testDynamicMarketMaker.ts",
     "test:production-risk-controls": "npm run build && node scripts/testProductionRiskControls.mjs",
     "test:reference-market-import": "tsx scripts/testReferenceMarketImport.ts",
+    "reference:cache-dry-run": "tsx scripts/referenceCacheDryRun.ts",
+    "liquidity:reference-dry-run": "tsx scripts/referenceAwareLiquidityDryRun.ts",
     "investigate:polymarket-worldcup-top20": "tsx scripts/investigatePolymarketWorldCupTopActive.ts",
     "investigate:polymarket-soccer-top20": "tsx scripts/investigatePolymarketSoccerTopActive.ts",
     "inspect:polymarket-market": "tsx scripts/inspectPolymarketMarket.ts",

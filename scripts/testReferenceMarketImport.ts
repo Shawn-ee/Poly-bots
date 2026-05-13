@@ -8,12 +8,23 @@ import {
   normalizeGammaMarket,
 } from "../src/referenceMarket/polymarketGammaClient.js";
 import { PolymarketClobClient } from "../src/referenceMarket/polymarketClobClient.js";
+import { ReferencePriceCache } from "../src/referenceMarket/referencePriceCache.js";
+import { buildDryRunMappingsForCandidate, buildReferenceMarketMapping } from "../src/referenceMarket/referenceMapping.js";
+import { ReferencePriceUpdater } from "../src/referenceMarket/referencePriceUpdater.js";
+import { buildReferencePriceQuote } from "../src/referenceMarket/referenceQuality.js";
 import { ReferenceMarketCandidate } from "../src/referenceMarket/types.js";
 
 async function main() {
   await testGammaNormalization();
   await testWorldCupFiltering();
   await testClobEmptyBookHandling();
+  await testCacheSetGet();
+  await testQuoteStaleAfter15Seconds();
+  await testHealthyQuoteIsHighQuality();
+  await testWideQuoteNotEligible();
+  await testMissingBidAsk();
+  await testUpdaterErrorDoesNotCrash();
+  await testSyntheticDryRunMappingWorks();
   await testDryRunDoesNotCreateMarkets();
   await testSingleMarketImportBySlug();
   await testCreateModeCreatesMappings();
@@ -89,6 +100,168 @@ async function testClobEmptyBookHandling() {
   assert.equal(quote.bestBid, null);
   assert.equal(quote.bestAsk, null);
   assert.equal(quote.midpoint, null);
+}
+
+async function testCacheSetGet() {
+  const cache = new ReferencePriceCache();
+  const quote = makeReferencePriceQuote();
+  cache.setQuote({ localMarketId: quote.localMarketId, localOutcomeId: quote.localOutcomeId }, quote);
+  assert.equal(cache.getQuote(quote.localMarketId, quote.localOutcomeId)?.polymarketOutcome, "Yes");
+  assert.equal(cache.getMarketQuotes(quote.localMarketId).length, 1);
+  assert.equal(cache.getQuotesBySource("polymarket").length, 1);
+}
+
+async function testQuoteStaleAfter15Seconds() {
+  let now = Date.parse("2026-01-01T00:00:00.000Z");
+  const cache = new ReferencePriceCache(15_000, () => now);
+  const quote = makeReferencePriceQuote({
+    receivedAt: new Date(now).toISOString(),
+    fetchedAt: new Date(now).toISOString(),
+  });
+  cache.setQuote({ localMarketId: quote.localMarketId, localOutcomeId: quote.localOutcomeId }, quote);
+  now += 15_001;
+  cache.markStale();
+  assert.equal(cache.isFresh(quote.localMarketId, quote.localOutcomeId), false);
+}
+
+async function testHealthyQuoteIsHighQuality() {
+  const mapping = approvedMapping();
+  const quote = buildReferencePriceQuote(
+    {
+      localMarketId: mapping.localMarketId,
+      localOutcomeId: mapping.localOutcomeId,
+      polymarketMarketId: mapping.polymarketMarketId,
+      conditionId: mapping.conditionId,
+      polymarketSlug: mapping.polymarketSlug,
+      polymarketOutcome: mapping.polymarketOutcome,
+      polymarketTokenId: mapping.polymarketTokenId,
+      gammaOutcomePrice: 0.395,
+      gammaBestBid: 0.39,
+      gammaBestAsk: 0.4,
+      gammaSpread: 0.01,
+      lastTradePrice: 0.395,
+      volume: 1000,
+      volume24hr: 250,
+      liquidity: 5000,
+      liquidityClob: 3000,
+      acceptingOrders: true,
+      competitive: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+    },
+    mapping,
+    {
+      now: Date.parse("2026-01-01T00:00:10.000Z"),
+    },
+  );
+
+  assert.equal(quote.qualityStatus, "high_quality");
+  assert.equal(quote.mmEligible, true);
+  assert.equal(quote.reason, null);
+}
+
+async function testWideQuoteNotEligible() {
+  const mapping = approvedMapping();
+  const quote = buildReferencePriceQuote(
+    {
+      localMarketId: mapping.localMarketId,
+      localOutcomeId: mapping.localOutcomeId,
+      polymarketMarketId: mapping.polymarketMarketId,
+      conditionId: mapping.conditionId,
+      polymarketSlug: mapping.polymarketSlug,
+      polymarketOutcome: mapping.polymarketOutcome,
+      polymarketTokenId: mapping.polymarketTokenId,
+      gammaOutcomePrice: 0.5,
+      gammaBestBid: 0.01,
+      gammaBestAsk: 0.99,
+      gammaSpread: 0.98,
+      lastTradePrice: 0.5,
+      volume: 1000,
+      volume24hr: 250,
+      liquidity: 5000,
+      liquidityClob: 3000,
+      acceptingOrders: true,
+      competitive: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+    },
+    mapping,
+    {
+      now: Date.parse("2026-01-01T00:00:10.000Z"),
+    },
+  );
+
+  assert.equal(quote.mmEligible, false);
+  assert.equal(quote.reason, "reference_spread_too_wide");
+}
+
+async function testMissingBidAsk() {
+  const mapping = approvedMapping();
+  const quote = buildReferencePriceQuote(
+    {
+      localMarketId: mapping.localMarketId,
+      localOutcomeId: mapping.localOutcomeId,
+      polymarketMarketId: mapping.polymarketMarketId,
+      conditionId: mapping.conditionId,
+      polymarketSlug: mapping.polymarketSlug,
+      polymarketOutcome: mapping.polymarketOutcome,
+      polymarketTokenId: mapping.polymarketTokenId,
+      gammaOutcomePrice: 0.4,
+      gammaBestBid: null,
+      gammaBestAsk: null,
+      gammaSpread: null,
+      lastTradePrice: 0.4,
+      volume: 1000,
+      volume24hr: 250,
+      liquidity: 5000,
+      liquidityClob: 3000,
+      acceptingOrders: true,
+      competitive: true,
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      fetchedAt: "2026-01-01T00:00:00.000Z",
+      receivedAt: "2026-01-01T00:00:00.000Z",
+    },
+    mapping,
+    {
+      now: Date.parse("2026-01-01T00:00:10.000Z"),
+    },
+  );
+
+  assert.equal(quote.mmEligible, false);
+  assert.equal(quote.reason, "reference_missing_book");
+}
+
+async function testUpdaterErrorDoesNotCrash() {
+  const cache = new ReferencePriceCache();
+  const mapping = approvedMapping();
+  const updater = new ReferencePriceUpdater({
+    cache,
+    mappings: [mapping],
+    gamma: {
+      getMarketBySlug: async () => {
+        throw new Error("gamma unavailable");
+      },
+    } as never,
+    logger: {
+      warn: () => undefined,
+      error: () => undefined,
+    },
+  });
+
+  await updater.pollOnce();
+  assert.equal(cache.getMarketQuotes(mapping.localMarketId).length, 0);
+}
+
+async function testSyntheticDryRunMappingWorks() {
+  const candidate = makeCandidate("Ukraine signs peace deal with Russia before 2027?", ["politics"]);
+  candidate.slug = "ukraine-signs-peace-deal-with-russia-before-2027";
+  candidate.category = "Politics";
+  const mappings = buildDryRunMappingsForCandidate(candidate);
+  assert.equal(mappings.length, 2);
+  assert.equal(mappings[0]?.reviewStatus, "synthetic");
+  assert.match(mappings[0]?.localMarketId ?? "", /^dry-run:/);
 }
 
 async function testDryRunDoesNotCreateMarkets() {
@@ -234,9 +407,10 @@ async function testCreateModeCreatesMappings() {
   assert.equal(result.localMarketsCreated[0]?.created, true);
   assert.equal(result.mappingsWritten.length, 2);
 
-  const mappingFile = JSON.parse(await readFile(path.join(tempDir, "map.json"), "utf8")) as Array<{ localMarketId: string }>;
+  const mappingFile = JSON.parse(await readFile(path.join(tempDir, "map.json"), "utf8")) as Array<{ localMarketId: string; localOutcomeId: string }>;
   assert.equal(mappingFile.length, 2);
   assert.equal(mappingFile[0]?.localMarketId, "local-1");
+  assert.equal(typeof mappingFile[0]?.localOutcomeId, "string");
 }
 
 async function testCreateModeIsIdempotent() {
@@ -324,6 +498,7 @@ function makeCandidate(question: string, tags: string[]): ReferenceMarketCandida
     bestAsk: 0.51,
     spread: 0.02,
     lastTradePrice: 0.5,
+    updatedAt: "2026-01-01T00:00:00.000Z",
     image: null,
     icon: null,
     outcomePrices: [0.5, 0.5],
@@ -346,6 +521,56 @@ function makeCandidate(question: string, tags: string[]): ReferenceMarketCandida
     ],
     clobTokenIds: ["tok-yes", "tok-no"],
     raw: {},
+  };
+}
+
+function approvedMapping() {
+  return buildReferenceMarketMapping({
+    localMarketId: "local-1",
+    localOutcomeId: "outcome-1",
+    localOutcome: "YES",
+    polymarketMarketId: "pm-1",
+    conditionId: "cond-1",
+    polymarketSlug: "example-market",
+    polymarketTokenId: "tok-yes",
+    polymarketOutcome: "Yes",
+    enabled: true,
+    mmEnabled: true,
+    reviewStatus: "approved",
+  });
+}
+
+function makeReferencePriceQuote(overrides: Partial<ReturnType<typeof buildReferencePriceQuote>> = {}) {
+  const mapping = approvedMapping();
+  return {
+    ...buildReferencePriceQuote(
+      {
+        localMarketId: mapping.localMarketId,
+        localOutcomeId: mapping.localOutcomeId,
+        polymarketMarketId: mapping.polymarketMarketId,
+        conditionId: mapping.conditionId,
+        polymarketSlug: mapping.polymarketSlug,
+        polymarketOutcome: mapping.polymarketOutcome,
+        polymarketTokenId: mapping.polymarketTokenId,
+        gammaOutcomePrice: 0.5,
+        gammaBestBid: 0.49,
+        gammaBestAsk: 0.51,
+        gammaSpread: 0.02,
+        lastTradePrice: 0.5,
+        volume: 1000,
+        volume24hr: 250,
+        liquidity: 5000,
+        liquidityClob: 3000,
+        acceptingOrders: true,
+        competitive: true,
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        fetchedAt: "2026-01-01T00:00:00.000Z",
+        receivedAt: "2026-01-01T00:00:00.000Z",
+      },
+      mapping,
+      { now: Date.parse("2026-01-01T00:00:10.000Z") },
+    ),
+    ...overrides,
   };
 }
 

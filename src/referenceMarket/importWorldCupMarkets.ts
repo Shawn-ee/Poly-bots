@@ -11,6 +11,7 @@ import {
 import { PolymarketClobClient } from "./polymarketClobClient.js";
 import { PolymarketGammaClient } from "./polymarketGammaClient.js";
 import { readReferenceMappings, upsertReferenceMappings, writeReferenceMappings } from "./mappingStore.js";
+import { buildReferenceMarketMapping, normalizeLocalOutcomeName } from "./referenceMapping.js";
 
 const DEFAULT_QUERIES = [
   "world cup",
@@ -71,20 +72,25 @@ export async function importPolymarketWorldCupMarkets(
         if (!outcome.tokenId) {
           return;
         }
-        newMappings.push({
-          localMarketId: response.marketId,
-          localOutcome: normalizeLocalOutcomeName(outcome.label, snapshot.candidate.outcomes.length),
-          source: "polymarket",
-          externalMarketId: snapshot.candidate.externalMarketId,
-          conditionId: snapshot.candidate.conditionId,
-          polymarketSlug: snapshot.candidate.slug,
-          polymarketTokenId: outcome.tokenId,
-          polymarketOutcome: outcome.label,
-          enabled: true,
-          notes: response.outcomeIds[index]
-            ? `Imported from Polymarket via admin metadata import.`
-            : "Imported from Polymarket.",
-        });
+        const localOutcomeId = response.outcomeIds[index] ?? `${response.marketId}:${index}`;
+        newMappings.push(
+          buildReferenceMarketMapping({
+            localMarketId: response.marketId,
+            localOutcomeId,
+            localOutcome: normalizeLocalOutcomeName(outcome.label, snapshot.candidate.outcomes.length),
+            polymarketMarketId: snapshot.candidate.externalMarketId,
+            conditionId: snapshot.candidate.conditionId,
+            polymarketSlug: snapshot.candidate.slug,
+            polymarketTokenId: outcome.tokenId,
+            polymarketOutcome: outcome.label,
+            enabled: true,
+            mmEnabled: false,
+            reviewStatus: "pending_review",
+            notes: response.outcomeIds[index]
+              ? "Imported from Polymarket via admin metadata import."
+              : "Imported from Polymarket.",
+          }),
+        );
       });
     }
 
@@ -225,14 +231,4 @@ function buildLocalDescription(candidate: ReferenceMarketCandidate): string {
   ].filter((line): line is string => typeof line === "string" && line.length > 0);
 
   return lines.join("\n");
-}
-
-function normalizeLocalOutcomeName(label: string, outcomeCount: number) {
-  if (outcomeCount === 2 && label.toLowerCase() === "yes") {
-    return "YES";
-  }
-  if (outcomeCount === 2 && label.toLowerCase() === "no") {
-    return "NO";
-  }
-  return label;
 }

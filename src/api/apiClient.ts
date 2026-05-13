@@ -4,6 +4,9 @@ import {
   AdminCreateMarketResponse,
   AdminImportReferenceMarketRequest,
   AdminImportReferenceMarketResponse,
+  AdminReferenceMarketsResponse,
+  AdminUpdateReferenceMarketRequest,
+  AdminUpdateReferenceMarketResponse,
   AdminMarketInvariantState,
   AdminResolveMarketResponse,
   AdminMarketStatus,
@@ -28,7 +31,7 @@ import {
 import { SseClient } from "./sseClient.js";
 
 type RequestOptions = {
-  method?: "GET" | "POST" | "DELETE";
+  method?: "GET" | "POST" | "PATCH" | "DELETE";
   query?: Record<string, string | number | undefined>;
   body?: unknown;
   idempotencyKey?: string;
@@ -187,6 +190,30 @@ export class ApiClient {
   ): Promise<AdminImportReferenceMarketResponse> {
     return this.request("/api/admin/reference-markets/polymarket/import", {
       method: "POST",
+      body: input,
+    });
+  }
+
+  async listAdminReferenceMarkets(filters: {
+    source?: string;
+    importStatus?: string;
+    search?: string;
+  } = {}): Promise<AdminReferenceMarketsResponse> {
+    return this.request("/api/admin/reference-markets", {
+      query: {
+        source: filters.source,
+        importStatus: filters.importStatus,
+        search: filters.search,
+      },
+    });
+  }
+
+  async updateAdminReferenceMarket(
+    marketId: string,
+    input: AdminUpdateReferenceMarketRequest,
+  ): Promise<AdminUpdateReferenceMarketResponse> {
+    return this.request(`/api/admin/reference-markets/${encodeURIComponent(marketId)}`, {
+      method: "PATCH",
       body: input,
     });
   }

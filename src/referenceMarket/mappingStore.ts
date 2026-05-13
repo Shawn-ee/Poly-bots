@@ -1,6 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ReferenceMarketMapping } from "./types.js";
+import { mappingKey } from "./referenceMapping.js";
 
 export async function readReferenceMappings(filePath: string): Promise<ReferenceMarketMapping[]> {
   try {
@@ -36,21 +37,10 @@ export function upsertReferenceMappings(
   }
   return Array.from(index.values()).sort((a, b) => {
     return (
-      a.externalMarketId.localeCompare(b.externalMarketId) ||
+      a.polymarketMarketId.localeCompare(b.polymarketMarketId) ||
       a.polymarketOutcome.localeCompare(b.polymarketOutcome) ||
-      a.localMarketId.localeCompare(b.localMarketId)
+      a.localMarketId.localeCompare(b.localMarketId) ||
+      a.localOutcomeId.localeCompare(b.localOutcomeId)
     );
   });
 }
-
-function mappingKey(mapping: ReferenceMarketMapping) {
-  return [
-    mapping.source,
-    mapping.externalMarketId,
-    mapping.conditionId ?? "",
-    mapping.polymarketTokenId,
-    mapping.localMarketId,
-    mapping.localOutcome,
-  ].join(":");
-}
-
