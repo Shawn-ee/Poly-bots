@@ -8,6 +8,7 @@ export const STRATEGY_CATEGORY_BY_NAME: Record<StrategyName, StrategyCategory> =
   tightMarketMaker: "systemLiquidity",
   inventoryAwareMaker: "systemLiquidity",
   dynamicMarketMaker: "systemLiquidity",
+  referenceArbitrageRebalancer: "systemLiquidity",
 };
 
 export function getStrategyCategory(strategy: StrategyName): StrategyCategory {

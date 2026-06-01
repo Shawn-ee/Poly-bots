@@ -1,7 +1,14 @@
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG } from "../strategies/referenceArbitrageConfig.js";
+import type { ReferenceArbitrageRebalancerConfig } from "../strategies/referenceArbitrageTypes.js";
 
-export type StrategyName = "tightMarketMaker" | "noiseTrader" | "inventoryAwareMaker" | "dynamicMarketMaker";
+export type StrategyName =
+  | "tightMarketMaker"
+  | "noiseTrader"
+  | "inventoryAwareMaker"
+  | "dynamicMarketMaker"
+  | "referenceArbitrageRebalancer";
 export type DailyNotionalPauseMode = "pause_for_run" | "cooldown_until_utc_reset" | "cooldown_ms";
 export type SimResolverMode =
   | "random_50_50"
@@ -135,6 +142,7 @@ export type BotConfig = {
   pausedPollIntervalMs: number;
   pauseLogIntervalMs: number;
   dynamicMarketMaker: DynamicMarketMakerConfig;
+  referenceArbitrageRebalancer: ReferenceArbitrageRebalancerConfig;
   risk: BotRiskConfig;
 };
 
@@ -161,7 +169,7 @@ export function loadConfig(
 
   const requireBots = options.requireBots ?? true;
   const { botValues, simValue } = normalizeRootConfig(raw);
-  const bots = botValues.map((value, index) => normalizeBotConfig(value, index));
+  const bots = applyReferenceArbitrageRuntimeOverrides(botValues.map((value, index) => normalizeBotConfig(value, index)));
   if (requireBots && bots.length === 0) {
     throw new Error("Bot config file contains no bots.");
   }
@@ -343,6 +351,7 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
         `${name}.inventoryTargetShares`,
       ),
     }),
+    referenceArbitrageRebalancer: normalizeReferenceArbitrageRebalancerConfig(bot, name),
     risk: normalizeBotRiskConfig(bot, name, {
       strategy: strategyField(bot.strategy, `${name}.strategy`),
       maxOrderSize: stringField(
@@ -376,6 +385,122 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
       marketCount: stringArrayField(bot.marketIds, `${name}.marketIds`).length,
     }),
   };
+}
+
+function normalizeReferenceArbitrageRebalancerConfig(
+  bot: Record<string, unknown>,
+  botName: string,
+): ReferenceArbitrageRebalancerConfig {
+  const raw =
+    bot.referenceArbitrageRebalancer && typeof bot.referenceArbitrageRebalancer === "object"
+      ? (bot.referenceArbitrageRebalancer as Record<string, unknown>)
+      : {};
+
+  return {
+    enabled: booleanField(
+      raw.enabled ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.enabled,
+      `${botName}.referenceArbitrageRebalancer.enabled`,
+    ),
+    dryRun: booleanField(
+      raw.dryRun ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.dryRun,
+      `${botName}.referenceArbitrageRebalancer.dryRun`,
+    ),
+    allowedMarketIds: optionalStringArrayField(
+      raw.allowedMarketIds ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.allowedMarketIds,
+      `${botName}.referenceArbitrageRebalancer.allowedMarketIds`,
+    ),
+    maxLiveMarkets: integerField(
+      raw.maxLiveMarkets ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxLiveMarkets,
+      `${botName}.referenceArbitrageRebalancer.maxLiveMarkets`,
+    ),
+    liveBankrollOverride:
+      raw.liveBankrollOverride === null
+        ? null
+        : numberField(
+            raw.liveBankrollOverride ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.liveBankrollOverride ?? 0,
+            `${botName}.referenceArbitrageRebalancer.liveBankrollOverride`,
+          ),
+    tickSize: stringField(
+      raw.tickSize ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.tickSize,
+      `${botName}.referenceArbitrageRebalancer.tickSize`,
+    ),
+    thresholdTicks: integerField(
+      raw.thresholdTicks ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.thresholdTicks,
+      `${botName}.referenceArbitrageRebalancer.thresholdTicks`,
+    ),
+    minEdgeAfterFees: stringField(
+      raw.minEdgeAfterFees ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.minEdgeAfterFees,
+      `${botName}.referenceArbitrageRebalancer.minEdgeAfterFees`,
+    ),
+    priceImprovementBuffer: stringField(
+      raw.priceImprovementBuffer ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.priceImprovementBuffer,
+      `${botName}.referenceArbitrageRebalancer.priceImprovementBuffer`,
+    ),
+    maxBankrollPerMarket: numberField(
+      raw.maxBankrollPerMarket ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxBankrollPerMarket,
+      `${botName}.referenceArbitrageRebalancer.maxBankrollPerMarket`,
+    ),
+    maxOrderNotional: numberField(
+      raw.maxOrderNotional ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxOrderNotional,
+      `${botName}.referenceArbitrageRebalancer.maxOrderNotional`,
+    ),
+    minOrderNotional: numberField(
+      raw.minOrderNotional ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.minOrderNotional,
+      `${botName}.referenceArbitrageRebalancer.minOrderNotional`,
+    ),
+    maxDailyNotionalPerMarket: numberField(
+      raw.maxDailyNotionalPerMarket ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxDailyNotionalPerMarket,
+      `${botName}.referenceArbitrageRebalancer.maxDailyNotionalPerMarket`,
+    ),
+    cooldownMs: integerField(
+      raw.cooldownMs ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.cooldownMs,
+      `${botName}.referenceArbitrageRebalancer.cooldownMs`,
+    ),
+    maxReferenceAgeMs: integerField(
+      raw.maxReferenceAgeMs ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxReferenceAgeMs,
+      `${botName}.referenceArbitrageRebalancer.maxReferenceAgeMs`,
+    ),
+    minReferenceLiquidity: numberField(
+      raw.minReferenceLiquidity ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.minReferenceLiquidity,
+      `${botName}.referenceArbitrageRebalancer.minReferenceLiquidity`,
+    ),
+    allowSyntheticOppositeTrade: booleanField(
+      raw.allowSyntheticOppositeTrade ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.allowSyntheticOppositeTrade,
+      `${botName}.referenceArbitrageRebalancer.allowSyntheticOppositeTrade`,
+    ),
+    maxOneSidedExposureRatio: unitIntervalField(
+      raw.maxOneSidedExposureRatio ?? DEFAULT_REFERENCE_ARBITRAGE_REBALANCER_CONFIG.maxOneSidedExposureRatio,
+      `${botName}.referenceArbitrageRebalancer.maxOneSidedExposureRatio`,
+    ),
+  };
+}
+
+function applyReferenceArbitrageRuntimeOverrides(bots: BotConfig[]): BotConfig[] {
+  const onlyReferenceArb = optionalBooleanEnv("REFERENCE_ARB_ONLY");
+  const enabledOverride = optionalBooleanEnv("REFERENCE_ARB_ENABLED");
+  const dryRunOverride = optionalBooleanEnv("REFERENCE_ARB_DRY_RUN");
+  const marketIdsOverride = parseOptionalEnvList(process.env.REFERENCE_ARB_MARKET_IDS);
+
+  const nextBots = bots
+    .filter((bot) => (onlyReferenceArb ? bot.strategy === "referenceArbitrageRebalancer" : true))
+    .map((bot) => {
+      if (bot.strategy !== "referenceArbitrageRebalancer") {
+        return bot;
+      }
+
+      return {
+        ...bot,
+        marketIds: marketIdsOverride ?? bot.marketIds,
+        referenceArbitrageRebalancer: {
+          ...bot.referenceArbitrageRebalancer,
+          ...(enabledOverride === null ? {} : { enabled: enabledOverride }),
+          ...(dryRunOverride === null ? {} : { dryRun: dryRunOverride }),
+          ...(marketIdsOverride === null ? {} : { allowedMarketIds: marketIdsOverride }),
+        },
+      };
+    });
+
+  return nextBots;
 }
 
 function normalizeDynamicMarketMakerConfig(
@@ -863,6 +988,13 @@ function stringArrayField(value: unknown, fieldName: string): string[] {
   return value.map((item, idx) => stringField(item, `${fieldName}[${idx}]`));
 }
 
+function optionalStringArrayField(value: unknown, fieldName: string): string[] {
+  if (!Array.isArray(value)) {
+    throw new Error(`Expected string array for ${fieldName}.`);
+  }
+  return value.map((item, idx) => stringField(item, `${fieldName}[${idx}]`));
+}
+
 function numberField(value: unknown, fieldName: string): number {
   const parsed = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(parsed) || parsed < 0) {
@@ -919,7 +1051,8 @@ function strategyField(value: unknown, fieldName: string): StrategyName {
     strategy !== "tightMarketMaker" &&
     strategy !== "noiseTrader" &&
     strategy !== "inventoryAwareMaker" &&
-    strategy !== "dynamicMarketMaker"
+    strategy !== "dynamicMarketMaker" &&
+    strategy !== "referenceArbitrageRebalancer"
   ) {
     throw new Error(`Unsupported strategy for ${fieldName}: ${strategy}`);
   }
@@ -949,6 +1082,25 @@ function simResolverModeField(value: unknown, fieldName: string): SimResolverMod
 
 function intFromEnv(key: string, fallback: number): number {
   return numberField(process.env[key] ?? fallback, key);
+}
+
+function optionalBooleanEnv(key: string): boolean | null {
+  const value = process.env[key];
+  if (value === undefined) {
+    return null;
+  }
+  return booleanField(value, key);
+}
+
+function parseOptionalEnvList(value: string | undefined): string[] | null {
+  if (value === undefined) {
+    return null;
+  }
+  const items = value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+  return items;
 }
 
 function numberArrayField(value: unknown, fieldName: string): number[] {

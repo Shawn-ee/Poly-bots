@@ -1,5 +1,5 @@
 import { ApiClient, PolyApiError } from "../api/apiClient.js";
-import { Order, Quote } from "../api/types.js";
+import { MarketReferencePlanResponse, Order, Quote } from "../api/types.js";
 import { BotConfig } from "../config/loadConfig.js";
 import { BotLogger } from "../logging/logger.js";
 import {
@@ -7,6 +7,10 @@ import {
   planDynamicMarketMakerMintReplenishment,
 } from "../strategies/liquidity/dynamicMarketMaker.js";
 import { inventoryAwareMakerStrategy } from "../strategies/liquidity/inventoryAwareMaker.js";
+import {
+  collectReferenceArbitrageCleanupActions,
+  referenceArbitrageRebalancerStrategy,
+} from "../strategies/referenceArbitrageRebalancer.js";
 import { noiseTraderStrategy } from "../strategies/userSimulation/noiseTrader.js";
 import {
   collectStaleCleanupActions,
@@ -41,6 +45,8 @@ export class BotRunner {
   private readonly lastPlacementByKey = new Map<string, number>();
   private readonly marketMintHistory = new Map<string, Array<{ ts: number; amount: string }>>();
   private readonly marketQuoteLagHistory = new Map<string, number[]>();
+  private readonly marketSubmittedNotionalHistory = new Map<string, Array<{ ts: number; cents: number }>>();
+  private readonly lastReferenceArbitrageDecisionAt = new Map<string, number>();
   private placementBlock: BotBlockState = { kind: "none" };
   private transportBackoffMs = 0;
   private lastPauseSkipLogAt = 0;
@@ -143,20 +149,36 @@ export class BotRunner {
         }
       }
 
-      for (const quote of quoteResponse.quotes) {
-        const marketOpenOrders = openOrders.filter((order) => order.marketId === marketId);
-        const outcomeOpenOrders = marketOpenOrders.filter((order) => order.outcomeId === quote.outcomeId);
-        const riskEvaluation = await this.riskManager.evaluateMarket({
+      const marketOpenOrders = openOrders.filter((order) => order.marketId === marketId);
+      const riskEvaluation = await this.riskManager.evaluateMarket({
+        marketId,
+        balance,
+        positions: positions.items,
+        openOrders,
+        quoteResponse,
+        freshness,
+      });
+      if (this.riskManager.shouldCancelAllOpenOrders()) {
+        openOrders = await this.cancelAllOpenOrders(openOrders);
+      }
+      if (this.bot.strategy === "referenceArbitrageRebalancer") {
+        openOrders = await this.runReferenceArbitrageMarket({
           marketId,
+          quoteResponse,
           balance,
           positions: positions.items,
           openOrders,
-          quoteResponse,
+          marketOpenOrders,
           freshness,
+          riskEvaluation,
+          signal,
         });
-        if (this.riskManager.shouldCancelAllOpenOrders()) {
-          openOrders = await this.cancelAllOpenOrders(openOrders);
-        }
+        continue;
+      }
+
+      for (const quote of quoteResponse.quotes) {
+        const marketOpenOrders = openOrders.filter((order) => order.marketId === marketId);
+        const outcomeOpenOrders = marketOpenOrders.filter((order) => order.outcomeId === quote.outcomeId);
         const context: StrategyContext = {
           bot: this.bot,
           marketId,
@@ -218,7 +240,6 @@ export class BotRunner {
         openOrders = await this.executeActions(
           actions,
           marketId,
-          quote,
           quoteResponse,
           { balance, positions: positions.items, freshness, riskEvaluation },
           openOrders,
@@ -287,7 +308,6 @@ export class BotRunner {
   private async executeActions(
     actions: StrategyAction[],
     marketId: string,
-    quote: Quote,
     quoteResponse: Awaited<ReturnType<ApiClient["getQuote"]>>,
     runtimeState: {
       balance: Awaited<ReturnType<ApiClient["getBalance"]>>;
@@ -352,13 +372,15 @@ export class BotRunner {
 
       const now = Date.now();
       const blockReason = this.resolvePlacementBlock(now);
+      const actionQuote =
+        quoteResponse.quotes.find((candidate) => candidate.outcomeId === action.outcomeId) ?? quoteResponse.quotes[0];
       if (blockReason) {
         if (!pauseSkipLogged && now - this.lastPauseSkipLogAt >= this.bot.pauseLogIntervalMs) {
           this.lastPauseSkipLogAt = now;
           pauseSkipLogged = true;
           this.logger.info("order_submit_skipped", {
             marketId,
-            outcomeId: quote.outcomeId,
+            outcomeId: action.outcomeId,
             side: action.side,
             reason: blockReason.reason,
             totalOpenOrders: nextOpenOrders.length,
@@ -371,12 +393,22 @@ export class BotRunner {
         continue;
       }
 
-      const placementKey = `${marketId}:${quote.outcomeId}:${action.side}`;
+      if (!actionQuote) {
+        this.logger.warn("order_submit_skipped", {
+          marketId,
+          outcomeId: action.outcomeId,
+          side: action.side,
+          reason: "missing_outcome_quote_skip",
+        });
+        continue;
+      }
+
+      const placementKey = `${marketId}:${action.outcomeId}:${action.side}`;
       const lastPlacementAt = this.lastPlacementByKey.get(placementKey) ?? 0;
       if (lastPlacementAt + this.bot.decisionCooldownMs > now) {
         this.logger.info("order_submit_skipped", {
           marketId,
-          outcomeId: quote.outcomeId,
+          outcomeId: action.outcomeId,
           side: action.side,
           reason: "cooldown_skip",
           cooldownType: "decision",
@@ -389,7 +421,7 @@ export class BotRunner {
 
       this.logger.info("decision_made", {
         marketId,
-        outcomeId: quote.outcomeId,
+        outcomeId: action.outcomeId,
         side: action.side,
         reason: action.reason,
         price: action.price,
@@ -400,12 +432,12 @@ export class BotRunner {
 
       const placementDecision = this.riskManager.checkPlacement({
         marketId,
-        outcomeId: quote.outcomeId,
+        outcomeId: action.outcomeId,
         action,
         balance: runtimeState.balance,
         positions: runtimeState.positions,
         openOrders: nextOpenOrders,
-        quote,
+        quote: actionQuote,
         marketQuotes: quoteResponse.quotes,
         freshness: runtimeState.freshness,
         evaluation: runtimeState.riskEvaluation,
@@ -457,6 +489,7 @@ export class BotRunner {
         this.placementBlock = { kind: "none" };
         this.transportBackoffMs = resetTransportBackoff();
         nextOpenOrders = upsertOpenOrder(nextOpenOrders, result.order);
+        this.recordSubmittedNotional(marketId, action.price, action.size);
         this.logger.info("order_submitted", {
           order: result.order,
           totalOpenOrders: nextOpenOrders.length,
@@ -485,7 +518,7 @@ export class BotRunner {
         const logPayload = {
           stage: "place_order",
           marketId,
-          outcomeId: quote.outcomeId,
+          outcomeId: action.outcomeId,
           side: action.side,
           idempotencyKey: action.idempotencyKey,
           totalOpenOrders: nextOpenOrders.length,
@@ -507,6 +540,149 @@ export class BotRunner {
     }
 
     return nextOpenOrders;
+  }
+
+  private async runReferenceArbitrageMarket(params: {
+    marketId: string;
+    quoteResponse: Awaited<ReturnType<ApiClient["getQuote"]>>;
+    balance: Awaited<ReturnType<ApiClient["getBalance"]>>;
+    positions: Awaited<ReturnType<ApiClient["getPositions"]>>["items"];
+    openOrders: Order[];
+    marketOpenOrders: Order[];
+    freshness: ReturnType<RuntimeStateSync["getFreshnessMetrics"]>;
+    riskEvaluation: RiskEvaluation;
+    signal: AbortSignal;
+  }): Promise<Order[]> {
+    let referencePlan: MarketReferencePlanResponse;
+    try {
+      referencePlan = await this.api.getMarketReferencePlan(params.marketId);
+    } catch (error) {
+      this.logger.warn("reference_arbitrage_reference_fetch_failed", {
+        marketId: params.marketId,
+        ...serializeError(error),
+      });
+      return params.openOrders;
+    }
+
+    const nowMs = Date.now();
+    const liveGate = this.resolveReferenceArbitrageLiveGate(params.marketId);
+    const activeBlock = this.resolvePlacementBlock(nowMs);
+    const cooldownActive =
+      nowMs - (this.lastReferenceArbitrageDecisionAt.get(params.marketId) ?? 0) <
+      this.bot.referenceArbitrageRebalancer.cooldownMs;
+    const context = {
+      bot: this.bot,
+      marketId: params.marketId,
+      marketQuotes: params.quoteResponse.quotes,
+      referencePlan,
+      balance: params.balance,
+      positions: params.positions,
+      totalOpenOrders: params.openOrders,
+      marketOpenOrders: params.openOrders.filter((order) => order.marketId === params.marketId),
+      now: new Date(nowMs),
+      recentQuoteLagEvents: this.getRecentQuoteLagEvents(params.marketId),
+      recentSubmittedNotionalCents: this.getSubmittedNotionalLast24h(params.marketId),
+      cooldownActive,
+    };
+
+    this.logger.info("reference_arbitrage_market_seen", {
+      marketId: params.marketId,
+      referenceOutcomeCount: referencePlan.outcomes.length,
+      totalOpenOrders: context.totalOpenOrders.length,
+      marketOpenOrders: context.marketOpenOrders.length,
+      freshness: params.freshness,
+      cooldownActive,
+      dryRun: this.bot.referenceArbitrageRebalancer.dryRun,
+      liveGateAllowed: liveGate.allowed,
+      liveGateReason: liveGate.reason,
+    });
+
+    const plan =
+      !liveGate.allowed
+        ? {
+            actions: this.bot.referenceArbitrageRebalancer.dryRun
+              ? []
+              : collectReferenceArbitrageCleanupActions(context, liveGate.reason ?? "reference_arbitrage_live_gate"),
+            opportunities: [],
+          }
+        : activeBlock || params.riskEvaluation.state === "paused" || params.riskEvaluation.state === "emergency_stop"
+        ? {
+            actions: this.bot.referenceArbitrageRebalancer.dryRun
+              ? collectReferenceArbitrageCleanupActions(
+                  context,
+                  activeBlock?.reason ?? params.riskEvaluation.reason ?? "reference_arbitrage_risk_cleanup",
+                ).map((action) => {
+                  if (action.type !== "cancel") {
+                    return action;
+                  }
+                  return {
+                    type: "skip" as const,
+                    reason: "reference_arbitrage_dry_run_cancel",
+                    marketId: params.marketId,
+                    outcomeId:
+                      referencePlan.outcomes[0]?.localOutcomeId ??
+                      params.quoteResponse.quotes[0]?.outcomeId ??
+                      "__reference__",
+                    details: {
+                      ...action.details,
+                      strategy: "referenceArbitrageRebalancer",
+                      intendedAction: "cancel",
+                      intendedOrderId: action.orderId,
+                      cancelReason: action.reason,
+                    },
+                  };
+                })
+              : collectReferenceArbitrageCleanupActions(
+                  context,
+                  activeBlock?.reason ?? params.riskEvaluation.reason ?? "reference_arbitrage_risk_cleanup",
+                ),
+            opportunities: [],
+          }
+        : referenceArbitrageRebalancerStrategy(context);
+
+    if (!liveGate.allowed) {
+      this.logger.warn("reference_arbitrage_live_market_blocked", {
+        marketId: params.marketId,
+        reason: liveGate.reason,
+        allowedMarketIds: this.bot.referenceArbitrageRebalancer.allowedMarketIds,
+        maxLiveMarkets: this.bot.referenceArbitrageRebalancer.maxLiveMarkets,
+      });
+    } else if (activeBlock) {
+      this.logPlacementBlockSkip(
+        params.marketId,
+        referencePlan.outcomes[0]?.localOutcomeId ?? params.quoteResponse.quotes[0]?.outcomeId ?? "__reference__",
+        activeBlock,
+        params.openOrders.length,
+      );
+    }
+    if (plan.opportunities.length > 0) {
+      this.lastReferenceArbitrageDecisionAt.set(params.marketId, nowMs);
+      this.logger.info("reference_arbitrage_opportunities_detected", {
+        marketId: params.marketId,
+        opportunities: plan.opportunities.map((opportunity) => ({
+          outcomeId: opportunity.outcomeId,
+          outcomeName: opportunity.outcomeName,
+          side: opportunity.side,
+          edge: opportunity.edge,
+          fairPrice: opportunity.fairPrice,
+          limitPrice: opportunity.limitPrice,
+        })),
+      });
+    }
+
+    return this.executeActions(
+      plan.actions,
+      params.marketId,
+      params.quoteResponse,
+      {
+        balance: params.balance,
+        positions: params.positions,
+        freshness: params.freshness,
+        riskEvaluation: params.riskEvaluation,
+      },
+      params.openOrders,
+      params.signal,
+    );
   }
 
   private async cancelAllOpenOrders(openOrders: Order[]): Promise<Order[]> {
@@ -621,6 +797,8 @@ export class BotRunner {
         return inventoryAwareMakerStrategy;
       case "dynamicMarketMaker":
         return dynamicMarketMakerStrategy;
+      case "referenceArbitrageRebalancer":
+        throw new Error("referenceArbitrageRebalancer is handled at market scope.");
     }
   }
 
@@ -660,6 +838,49 @@ export class BotRunner {
     const history = (this.marketQuoteLagHistory.get(marketId) ?? []).filter((ts) => now - ts <= 5 * 60_000);
     this.marketQuoteLagHistory.set(marketId, history);
     return history.length;
+  }
+
+  private recordSubmittedNotional(marketId: string, price: string, size: string) {
+    const retained = (this.marketSubmittedNotionalHistory.get(marketId) ?? []).filter(
+      (entry) => entry.ts > Date.now() - 24 * 60 * 60 * 1000,
+    );
+    retained.push({
+      ts: Date.now(),
+      cents: Math.round(Number(price) * Number(size) * 100),
+    });
+    this.marketSubmittedNotionalHistory.set(marketId, retained);
+  }
+
+  private getSubmittedNotionalLast24h(marketId: string): number {
+    const now = Date.now();
+    const retained = (this.marketSubmittedNotionalHistory.get(marketId) ?? []).filter(
+      (entry) => entry.ts > now - 24 * 60 * 60 * 1000,
+    );
+    this.marketSubmittedNotionalHistory.set(marketId, retained);
+    return retained.reduce((sum, entry) => sum + entry.cents, 0);
+  }
+
+  private resolveReferenceArbitrageLiveGate(
+    marketId: string,
+  ): { allowed: boolean; reason: string | null } {
+    const config = this.bot.referenceArbitrageRebalancer;
+    if (config.dryRun) {
+      return { allowed: true, reason: null };
+    }
+
+    if (config.allowedMarketIds.length > 0 && !config.allowedMarketIds.includes(marketId)) {
+      return { allowed: false, reason: "market_not_in_allowed_live_list" };
+    }
+
+    const orderedLiveMarkets = this.bot.marketIds.filter((id) =>
+      config.allowedMarketIds.length > 0 ? config.allowedMarketIds.includes(id) : true,
+    );
+    const maxLiveMarkets = Math.max(1, config.maxLiveMarkets);
+    if (!orderedLiveMarkets.slice(0, maxLiveMarkets).includes(marketId)) {
+      return { allowed: false, reason: "market_outside_max_live_markets_window" };
+    }
+
+    return { allowed: true, reason: null };
   }
 
   private async ensureRuntimeState(signal: AbortSignal) {

@@ -5,6 +5,12 @@ import {
   AdminImportReferenceMarketRequest,
   AdminImportReferenceMarketResponse,
   AdminReferenceMarketsResponse,
+  AdminRefreshReferenceSnapshotsResponse,
+  AdminSeedReferenceBotRequest,
+  AdminSeedReferenceBotResponse,
+  MarketReferencePlanResponse,
+  AdminUpsertReferenceQuoteSnapshotsRequest,
+  AdminUpsertReferenceQuoteSnapshotsResponse,
   AdminUpdateReferenceMarketRequest,
   AdminUpdateReferenceMarketResponse,
   AdminMarketInvariantState,
@@ -214,6 +220,37 @@ export class ApiClient {
   ): Promise<AdminUpdateReferenceMarketResponse> {
     return this.request(`/api/admin/reference-markets/${encodeURIComponent(marketId)}`, {
       method: "PATCH",
+      body: input,
+    });
+  }
+
+  async upsertAdminReferenceQuoteSnapshots(
+    input: AdminUpsertReferenceQuoteSnapshotsRequest,
+  ): Promise<AdminUpsertReferenceQuoteSnapshotsResponse> {
+    return this.request("/api/admin/reference-quote-snapshots", {
+      method: "POST",
+      body: input,
+    });
+  }
+
+  async getMarketReferencePlan(marketId: string): Promise<MarketReferencePlanResponse> {
+    return this.request(`/api/markets/${encodeURIComponent(marketId)}/reference`);
+  }
+
+  async refreshAdminReferenceMarketSnapshot(
+    marketId: string,
+  ): Promise<AdminRefreshReferenceSnapshotsResponse> {
+    return this.request(`/api/admin/reference-markets/${encodeURIComponent(marketId)}/refresh-snapshot`, {
+      method: "POST",
+    });
+  }
+
+  async seedAdminReferenceMarketBot(
+    marketId: string,
+    input: AdminSeedReferenceBotRequest,
+  ): Promise<AdminSeedReferenceBotResponse> {
+    return this.request(`/api/admin/reference-markets/${encodeURIComponent(marketId)}/seed-bot`, {
+      method: "POST",
       body: input,
     });
   }

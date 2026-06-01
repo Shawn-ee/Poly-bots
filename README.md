@@ -24,6 +24,7 @@
 - `tightMarketMaker`: keeps both bid and ask near fair price, improves the top of book when reasonable, and refreshes stale quotes quickly
 - `inventoryAwareMaker`: keeps both sides quoted but leans prices based on current inventory so the bot does not drift too far one way
 - `dynamicMarketMaker`: builds a small bid/ask ladder from the current binary book, widens or tightens spread from live market width, and scales quoting by inventory pressure
+- `referenceArbitrageRebalancer`: takes local prices that are materially away from mapped reference fair value while respecting per-market bankroll and rollout guards
 - `noiseTrader`: occasionally joins or crosses the spread with small size to generate fills and believable short-term price action
 
 These bots are rule-based only. There is no LLM, news inference, or external intelligence.
@@ -103,6 +104,7 @@ Useful config fields:
 - `inventoryTargetShares`
 - `inventorySkewStrength`
 - `dynamicMarketMaker`
+- `referenceArbitrageRebalancer`
 - `dailyNotionalPauseMode`
 
 Environment variables are optional overrides for the same defaults in `.env.example`.
@@ -128,12 +130,91 @@ Development:
 npm run dev
 ```
 
+Reference arbitrage observation only:
+
+```bash
+REFERENCE_ARB_ENABLED=true \
+REFERENCE_ARB_DRY_RUN=true \
+REFERENCE_ARB_ONLY=true \
+REFERENCE_ARB_MARKET_IDS=market-1,market-2 \
+npm run bot
+```
+
+This does three things at startup:
+- filters execution down to bots whose strategy is `referenceArbitrageRebalancer`
+- forces that strategy into dry-run mode
+- overrides the selected market list for those bots
+
+Single-market live rollout guard:
+
+```json
+{
+  "strategy": "referenceArbitrageRebalancer",
+  "marketIds": ["market-1", "market-2"],
+  "referenceArbitrageRebalancer": {
+    "enabled": true,
+    "dryRun": false,
+    "allowedMarketIds": ["market-1"],
+    "maxLiveMarkets": 1,
+    "liveBankrollOverride": 100
+  }
+}
+```
+
+Live guard behavior:
+- `allowedMarketIds` restricts which configured markets may place live orders
+- `maxLiveMarkets` limits live trading to the first N eligible markets in bot config order
+- `liveBankrollOverride` caps live bankroll below the normal `maxBankrollPerMarket` for controlled rollout
+
 Build and run:
 
 ```bash
 npm run build
 npm start
 ```
+
+## Reference Liquidity Runbook
+
+Local reference-market supervision uses three terminals:
+
+Terminal 1:
+```bash
+cd ../Poly
+npm run dev
+```
+
+Terminal 2:
+```bash
+cd ../Poly
+npm run reference:snapshot-watch
+```
+
+Terminal 3:
+```bash
+cd poly-bot
+npm run liquidity:runtime
+```
+
+Operational notes:
+- `npm run liquidity:runtime` is dry-run by default and does not place live orders without explicit live flags.
+- To seed a market bot:
+```bash
+npm run liquidity:seed-market-bot -- --slug will-france-win-the-2026-fifa-world-cup-924 --capitalDollars 1000 --mintDollars 200 --dryRun true
+```
+- To prepare a market for dry-run or live review, use `/admin/reference-markets` in the app:
+  - run readiness check
+  - mark `dry_run_ready`
+  - mark `live_ready`
+  - pause bot
+  - emergency stop
+  - cancel bot quotes
+- Live quote management still requires:
+  - `SYSTEM_LIQUIDITY_DRY_RUN=false`
+  - `LIVE_SYSTEM_LIQUIDITY_ENABLED=true`
+  - market lifecycle `live_enabled`
+  - explicit `--confirmLive true`
+
+To verify no user simulation bots are running, do not start `npm run dev`, `npm run sim:all`, `npm run bots:restart-clean`, or any noise-trader/simulation workflow from this repo.
 
 ## Clean Reset
 

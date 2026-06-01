@@ -2,12 +2,16 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import assert from "node:assert/strict";
 import { ApiClient } from "../src/api/apiClient.js";
-import { AdminImportReferenceMarketRequest, AdminReferenceMarketItem } from "../src/api/types.js";
+import {
+  AdminImportReferenceMarketRequest,
+  AdminReferenceQuoteSnapshotInput,
+  AdminReferenceMarketItem,
+} from "../src/api/types.js";
 import { PolymarketGammaClient, ReferenceMarketCandidate } from "../src/referenceMarket/polymarketGammaClient.js";
 import { ReferencePriceCache } from "../src/referenceMarket/referencePriceCache.js";
 import { buildReferenceMarketMapping } from "../src/referenceMarket/referenceMapping.js";
+import { buildDryRunReferencePlan, buildSnapshotPayload } from "../src/referenceMarket/referenceQuotePlan.js";
 import { ReferencePriceUpdater } from "../src/referenceMarket/referencePriceUpdater.js";
-import { shiftPriceByTicks } from "../src/strategies/shared/common.js";
 import { sleep } from "../src/utils/sleep.js";
 
 async function main() {
@@ -23,7 +27,10 @@ async function main() {
 
   const api = new ApiClient(options.baseUrl, sessionCookie, {
     authMode: "cookie",
-    cookieName: "next-auth.session-token",
+    cookieName: "poly_session",
+    extraHeaders: process.env.POLY_DEV_ADMIN_USER_ID
+      ? { "x-dev-admin-user-id": process.env.POLY_DEV_ADMIN_USER_ID }
+      : undefined,
   });
   const gamma = new PolymarketGammaClient();
   const localMarket = await ensureImportedAndApproved(api, gamma, options.slug);
@@ -44,7 +51,10 @@ async function main() {
   let lastPlan: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
     await updater.pollOnce();
-    lastPlan = buildPlan(cache, mappings, options.tickSize);
+    lastPlan = buildDryRunReferencePlan(cache, mappings, options.tickSize);
+    await api.upsertAdminReferenceQuoteSnapshots({
+      snapshots: buildSnapshotPayload(cache, mappings),
+    });
     printPlan(lastPlan);
     if (Date.now() + options.pollIntervalMs >= deadline) {
       break;
@@ -72,7 +82,7 @@ async function ensureImportedAndApproved(api: ApiClient, gamma: PolymarketGammaC
     referenceOnly: true,
     tradable: false,
     mmEnabled: true,
-    isListed: false,
+    isListed: market.isListed ?? true,
     reviewNotes: "Approved for reference-aware system liquidity dry-run only.",
   });
   const approved = await findBySlug(api, slug);
@@ -190,32 +200,6 @@ function buildRealMappings(localMarket: AdminReferenceMarketItem) {
     );
 }
 
-function buildPlan(
-  cache: ReferencePriceCache,
-  mappings: ReturnType<typeof buildRealMappings>,
-  tickSize: string,
-) {
-  return mappings.map((mapping) => {
-    const quote = cache.getQuote(mapping.localMarketId, mapping.localOutcomeId);
-    const referenceBid = quote?.gammaBestBid ?? null;
-    const referenceAsk = quote?.gammaBestAsk ?? null;
-    const plannedBid = referenceBid != null ? clampPlanPrice(shiftPriceByTicks(referenceBid.toFixed(2), tickSize, -2)) : null;
-    const plannedAsk = referenceAsk != null ? clampPlanPrice(shiftPriceByTicks(referenceAsk.toFixed(2), tickSize, 2)) : null;
-    return {
-      localMarketId: mapping.localMarketId,
-      localOutcomeId: mapping.localOutcomeId,
-      polymarketTokenId: mapping.polymarketTokenId,
-      referenceBid,
-      referenceAsk,
-      plannedBotBid: plannedBid,
-      plannedBotAsk: plannedAsk,
-      mmEligible: quote?.mmEligible ?? false,
-      qualityStatus: quote?.qualityStatus ?? null,
-      reason: quote?.reason ?? null,
-    };
-  });
-}
-
 function printPlan(plan: Array<Record<string, unknown>>) {
   for (const row of plan) {
     console.log(JSON.stringify(row, null, 2));
@@ -289,14 +273,6 @@ async function writeDryRunBotsJson(localMarketId: string, baseUrl: string) {
   };
 
   await writeFile(path.resolve(process.cwd(), "bots.json"), `${JSON.stringify(config, null, 2)}\n`, "utf8");
-}
-
-function clampPlanPrice(value: string) {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) {
-    return null;
-  }
-  return Number(Math.max(0.01, Math.min(0.99, numeric)).toFixed(2));
 }
 
 function parseArgs(argv: string[]) {

@@ -241,6 +241,55 @@ export type AdminReferenceMarketOutcome = {
   referenceMetadata: unknown;
 };
 
+export type BotInitializationMetadata = {
+  status: string;
+  lastCheckedAt: string | null;
+  reason: string | null;
+  approvedBy: string | null;
+  approvedAt: string | null;
+  riskProfile: string | null;
+  capital?: {
+    budgetCents: number | null;
+    mintBudgetCents: number | null;
+    mintedCompleteSets: number | null;
+    cashReserveCents: number | null;
+    autoReplenish: boolean;
+    initializedAt: string | null;
+    initializedBy: string | null;
+    botUserId: string | null;
+    botUsername: string | null;
+    botApiCredentialId: string | null;
+    botApiKeyId: string | null;
+    maxSingleOrderNotionalCents: number | null;
+    maxOpenOrderNotionalCents: number | null;
+    maxDailyLossCents: number | null;
+    openOrderNotionalCents?: number | null;
+    dailyLossCents?: number | null;
+    availableCashUSDC?: number | null;
+    lockedCashUSDC?: number | null;
+  } | null;
+  runtime?: {
+    liveOrdersEnabled: boolean;
+    emergencyStop: boolean;
+    cancelRequestedAt: string | null;
+    lastSeededAt: string | null;
+    lastLiveRunAt: string | null;
+    lastRuntimeSyncAt: string | null;
+  } | null;
+  readiness?: {
+    ready: boolean;
+    dryRun: boolean;
+    liveRequested: boolean;
+    reasons: string[];
+    referenceBid: number | null;
+    referenceAsk: number | null;
+    plannedBotBid: number | null;
+    plannedBotAsk: number | null;
+    riskProfile: string | null;
+    checkedAt: string | null;
+  } | null;
+};
+
 export type AdminReferenceMarketItem = {
   id: string;
   title: string;
@@ -275,6 +324,20 @@ export type AdminReferenceMarketItem = {
   volume24hr: unknown;
   liquidity: unknown;
   acceptingOrders: unknown;
+  snapshotSummary?: {
+    source: string;
+    referenceBid: number | null;
+    referenceAsk: number | null;
+    plannedBotBid: number | null;
+    plannedBotAsk: number | null;
+    qualityStatus: string | null;
+    isFresh: boolean;
+    mmEligible: boolean;
+    dryRun: boolean;
+    quotePlanEnabled: boolean;
+    hasSnapshot: boolean;
+  } | null;
+  botInitialization?: BotInitializationMetadata | null;
   referenceMetadata: unknown;
   outcomes: AdminReferenceMarketOutcome[];
 };
@@ -284,13 +347,26 @@ export type AdminReferenceMarketsResponse = {
 };
 
 export type AdminUpdateReferenceMarketRequest = {
-  action?: "approve" | "reject" | "reset";
+  action?:
+    | "approve"
+    | "reject"
+    | "reset"
+    | "refresh_snapshot"
+    | "run_readiness_check"
+    | "mark_dry_run_running"
+    | "pause_bot"
+    | "reset_bot_initialization"
+    | "mark_live_ready"
+    | "mark_live_enabled"
+    | "emergency_stop"
+    | "cancel_bot_quotes";
   importStatus?: "pending_review" | "approved" | "rejected";
   referenceOnly?: boolean;
   tradable?: boolean;
   mmEnabled?: boolean;
   isListed?: boolean;
   reviewNotes?: string;
+  botInitialization?: Partial<BotInitializationMetadata> | null;
 };
 
 export type AdminUpdateReferenceMarketResponse = {
@@ -304,6 +380,141 @@ export type AdminUpdateReferenceMarketResponse = {
   reviewedAt: string | null;
   reviewedBy: string | null;
   reviewNotes: string | null;
+  botInitialization?: BotInitializationMetadata | null;
+};
+
+export type AdminReferenceQuoteSnapshotInput = {
+  marketId: string;
+  outcomeId: string;
+  source: string;
+  externalSlug?: string | null;
+  externalMarketId?: string | null;
+  conditionId?: string | null;
+  tokenId?: string | null;
+  outcomeLabel?: string | null;
+  outcomePrice?: number | null;
+  bestBid?: number | null;
+  bestAsk?: number | null;
+  spread?: number | null;
+  lastTradePrice?: number | null;
+  volume?: number | null;
+  volume24hr?: number | null;
+  liquidity?: number | null;
+  liquidityClob?: number | null;
+  acceptingOrders?: boolean;
+  qualityStatus?: string | null;
+  mmEligible?: boolean;
+  reason?: string | null;
+  fetchedAt: string;
+};
+
+export type AdminUpsertReferenceQuoteSnapshotsRequest = {
+  snapshots: AdminReferenceQuoteSnapshotInput[];
+};
+
+export type AdminUpsertReferenceQuoteSnapshotsResponse = {
+  ok: boolean;
+  updated: number;
+};
+
+export type AdminRefreshReferenceSnapshotsResponse = {
+  ok: boolean;
+  generatedAt: string;
+  dryRun: boolean;
+  liveOrdersEnabled: boolean;
+  pollMs: number;
+  refreshedCount: number;
+  skippedCount: number;
+  refreshed: Array<Record<string, unknown>>;
+  skipped: Array<Record<string, unknown>>;
+};
+
+export type MarketReferencePlanOutcome = {
+  localMarketId: string;
+  localOutcomeId: string;
+  outcomeName: string;
+  referenceSource: string;
+  polymarketSlug: string | null;
+  polymarketMarketId: string | null;
+  conditionId: string | null;
+  polymarketTokenId: string | null;
+  gammaOutcomePrice: number | null;
+  gammaBestBid: number | null;
+  gammaBestAsk: number | null;
+  gammaSpread: number | null;
+  lastTradePrice: number | null;
+  volume: number | null;
+  volume24hr: number | null;
+  liquidity: number | null;
+  acceptingOrders: boolean;
+  fetchedAt: string | null;
+  ageMs: number | null;
+  isFresh: boolean;
+  hasSnapshot: boolean;
+  qualityStatus: string | null;
+  mmEligible: boolean;
+  mmEnabled: boolean;
+  reason: string | null;
+  tickSize: string;
+  quoteOffsetTicks: number;
+  plannedBotBid: number | null;
+  plannedBotAsk: number | null;
+  referenceBid: number | null;
+  referenceAsk: number | null;
+  dryRun: boolean;
+  liveOrdersEnabled: boolean;
+  quotePlanEnabled: boolean;
+  quotePreviewAvailable: boolean;
+  activeBotBid?: number | null;
+  activeBotAsk?: number | null;
+  activeBidOrderId?: string | null;
+  activeAskOrderId?: string | null;
+  formula: string;
+};
+
+export type MarketReferencePlanResponse = {
+  marketId: string;
+  source: string | null;
+  externalSlug: string | null;
+  externalMarketId?: string | null;
+  conditionId: string | null;
+  hasSnapshot: boolean;
+  reason: string | null;
+  dryRun: boolean;
+  liveOrdersEnabled: boolean;
+  botInitialization?: BotInitializationMetadata | null;
+  outcomes: MarketReferencePlanOutcome[];
+};
+
+export type AdminSeedReferenceBotRequest = {
+  capitalDollars: number;
+  mintDollars: number;
+  dryRun: boolean;
+  confirmSeed?: boolean;
+};
+
+export type AdminSeedReferenceBotResponse = {
+  ok: boolean;
+  dryRun: boolean;
+  marketId: string;
+  title: string;
+  referenceSource: string | null;
+  importStatus: string | null;
+  isListed: boolean;
+  binary: boolean;
+  seeded: boolean;
+  alreadySeeded: boolean;
+  noMutation: boolean;
+  capitalCents: number;
+  mintBudgetCents: number;
+  cashReserveCents: number;
+  mintedCompleteSets: number;
+  autoReplenish: boolean;
+  botUserId: string | null;
+  botUsername: string | null;
+  botApiCredentialId: string | null;
+  botApiKeyId: string | null;
+  botApiToken: string | null;
 };
 
 export type AdminMarketStatus = "UPCOMING" | "LIVE" | "CLOSED" | "RESOLVED" | "ACTIVE" | "PAUSED" | "CANCELED";
