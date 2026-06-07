@@ -62,7 +62,7 @@ function parseArgs(argv: string[]): ImportWorldCupOptions {
     slug: stringArg(args.get("slug")),
     outputPath: path.resolve(cwd, args.get("output") ?? defaultOutput),
     mappingPath: path.resolve(cwd, args.get("mapping") ?? defaultMapping),
-    baseUrl: process.env.POLY_BOT_BASE_URL ?? "http://127.0.0.1:3000",
+    baseUrl: process.env.POLY_BOT_BASE_URL ?? "http://127.0.0.1:3001",
     adminSessionCookie: process.env.POLY_SIM_SESSION_COOKIE ?? null,
   };
 }

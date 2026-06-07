@@ -133,7 +133,7 @@ function createManager(bot: BotConfig) {
 function createBotConfig(overrides: Partial<BotConfig> & { risk?: Partial<BotConfig["risk"]> } = {}): BotConfig {
   const base: BotConfig = {
     name: "risk-test-bot",
-    baseUrl: "http://localhost:3000",
+    baseUrl: "http://127.0.0.1:3001",
     apiKey: "test.secret",
     strategy: "dynamicMarketMaker",
     marketIds: ["market-1"],

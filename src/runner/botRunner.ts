@@ -1,6 +1,13 @@
 import { ApiClient, PolyApiError } from "../api/apiClient.js";
 import { MarketReferencePlanResponse, Order, Quote } from "../api/types.js";
 import { BotConfig } from "../config/loadConfig.js";
+import {
+  assertOrderWithinGlobalCaps,
+  canCancelLiveInternalOrders,
+  canPlaceLiveInternalOrders,
+  loadBotSafetyPolicy,
+  type BotSafetyPolicy,
+} from "../config/botSafety.js";
 import { BotLogger } from "../logging/logger.js";
 import {
   dynamicMarketMakerStrategy,
@@ -39,6 +46,7 @@ export class BotRunner {
   private readonly strategyCategory: ReturnType<typeof getStrategyCategory>;
   private readonly stateSync: RuntimeStateSync;
   private readonly riskManager: BotRiskManager;
+  private readonly safetyPolicy: BotSafetyPolicy;
   private runtimeController: AbortController | null = null;
   private runtimeInitPromise: Promise<void> | null = null;
   private readonly seenFillIds = new Set<string>();
@@ -57,6 +65,7 @@ export class BotRunner {
     this.strategyCategory = getStrategyCategory(bot.strategy);
     this.stateSync = new RuntimeStateSync(bot, this.api, this.logger);
     this.riskManager = new BotRiskManager(bot, this.strategyCategory, this.api, this.logger);
+    this.safetyPolicy = loadBotSafetyPolicy();
   }
 
   async run(signal: AbortSignal): Promise<void> {
@@ -65,6 +74,10 @@ export class BotRunner {
       strategyCategory: this.strategyCategory,
       marketIds: this.bot.marketIds,
       baseUrl: this.bot.baseUrl,
+      executionMode: this.safetyPolicy.mode,
+      botsEnabled: this.safetyPolicy.botsEnabled,
+      liveTradingEnabled: this.safetyPolicy.liveTradingEnabled,
+      globalKillSwitch: this.safetyPolicy.globalKillSwitch,
     });
 
     await this.ensureRuntimeState(signal);
@@ -276,6 +289,16 @@ export class BotRunner {
       return null;
     }
 
+    const liveGate = canPlaceLiveInternalOrders(this.safetyPolicy);
+    if (!liveGate.allowed) {
+      this.logger.warn("mint_replenishment_blocked", {
+        marketId: params.marketId,
+        reason: liveGate.reason,
+        executionMode: this.safetyPolicy.mode,
+      });
+      return null;
+    }
+
     try {
       const result = await this.api.mintCompleteSet(params.marketId, plan.finalMintAmount);
       this.recordMint(params.marketId, plan.finalMintAmount);
@@ -327,6 +350,16 @@ export class BotRunner {
       }
 
       if (action.type === "cancel") {
+        const cancelGate = canCancelLiveInternalOrders(this.safetyPolicy);
+        if (!cancelGate.allowed) {
+          this.logger.warn("order_cancel_blocked", {
+            orderId: action.orderId,
+            reason: cancelGate.reason,
+            executionMode: this.safetyPolicy.mode,
+            globalKillSwitch: this.safetyPolicy.globalKillSwitch,
+          });
+          continue;
+        }
         try {
           const result = await this.api.cancelOrder(action.orderId);
           nextOpenOrders = nextOpenOrders.filter((order) => order.id !== action.orderId);
@@ -429,6 +462,31 @@ export class BotRunner {
         totalOpenOrders: nextOpenOrders.length,
         ...(action.details ? action.details : {}),
       });
+
+      const liveGate = canPlaceLiveInternalOrders(this.safetyPolicy);
+      if (!liveGate.allowed) {
+        this.logger.warn("order_submit_skipped", {
+          marketId,
+          outcomeId: action.outcomeId,
+          side: action.side,
+          reason: liveGate.reason,
+          executionMode: this.safetyPolicy.mode,
+          globalKillSwitch: this.safetyPolicy.globalKillSwitch,
+        });
+        continue;
+      }
+      const globalCap = assertOrderWithinGlobalCaps(this.safetyPolicy, action.size);
+      if (!globalCap.allowed) {
+        this.logger.warn("risk_check_failed", {
+          marketId,
+          outcomeId: action.outcomeId,
+          side: action.side,
+          reason: globalCap.reason,
+          maxOrderSize: this.safetyPolicy.maxOrderSize,
+          requestedSize: action.size,
+        });
+        continue;
+      }
 
       const placementDecision = this.riskManager.checkPlacement({
         marketId,
@@ -691,6 +749,15 @@ export class BotRunner {
     }
     let remaining = [...openOrders];
     for (const order of openOrders) {
+      const cancelGate = canCancelLiveInternalOrders(this.safetyPolicy);
+      if (!cancelGate.allowed) {
+        this.logger.warn("order_cancel_blocked", {
+          orderId: order.id,
+          reason: cancelGate.reason,
+          executionMode: this.safetyPolicy.mode,
+        });
+        continue;
+      }
       try {
         const result = await this.api.cancelOrder(order.id);
         remaining = remaining.filter((item) => item.id !== order.id);

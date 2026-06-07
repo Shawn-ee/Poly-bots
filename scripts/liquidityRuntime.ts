@@ -26,7 +26,9 @@ function buildRiskConfig(): LiveRiskConfig {
     maxReferenceSpread: numberEnv("MAX_REFERENCE_SPREAD", 0.1),
     quoteOffsetTicks: intEnv("QUOTE_OFFSET_TICKS", 2),
     tickSize: process.env.TICK_SIZE?.trim() || "0.01",
+    /** Per-order size cap: $10 for beta safety */
     maxSingleOrderNotionalCents: intEnv("MAX_SINGLE_ORDER_NOTIONAL_CENTS", 1000),
+    /** Legacy per-market open order cap — replaced by maxPerMarketExposureCents */
     maxOpenOrderNotionalCents: intEnv("MAX_OPEN_ORDER_NOTIONAL_CENTS", 10000),
     maxDailyLossCents: intEnv("MAX_DAILY_LOSS_CENTS", 10000),
     maxInventoryPerOutcome: intEnv("MAX_INVENTORY_PER_OUTCOME", 300),
@@ -34,7 +36,19 @@ function buildRiskConfig(): LiveRiskConfig {
     minCashReserveCents: intEnv("MIN_CASH_RESERVE_CENTS", 20000),
     maxShareSize: numberEnv("MAX_SINGLE_ORDER_SIZE_SHARES", 10),
     minQuoteLifetimeMs: intEnv("MIN_QUOTE_LIFETIME_MS", 5000),
-    requoteThresholdTicks: intEnv("REQUOTE_THRESHOLD_TICKS", 1),
+    /** Only replace quotes when midpoint moved >= 2 ticks (was 1, caused churn) */
+    requoteThresholdTicks: intEnv("REQUOTE_THRESHOLD_TICKS", 2),
+    /** Per-market max exposure (open orders + inventory): $200 for beta */
+    maxPerMarketExposureCents: intEnv("MAX_PER_MARKET_EXPOSURE_CENTS",
+      intEnv("MAX_LIQUIDITY_PER_MARKET_CENTS", 20000)),
+    /** Global max exposure across all managed markets: $60,000 for 300-market scale */
+    maxGlobalExposureCents: intEnv("MAX_GLOBAL_EXPOSURE_CENTS", 6000000),
+    /** Max open orders per market: 4 (2 outcomes × 2 sides) */
+    maxOpenOrdersPerMarket: intEnv("MAX_OPEN_ORDERS_PER_MARKET", 4),
+    /** Anti-spam daily submitted notional guard (NOT an exposure limit).
+     *  Set high — this is only to catch runaway loops, not to cap normal operation.
+     *  Default: $500,000/day. The true risk limit is maxGlobalExposureCents. */
+    maxDailySubmittedNotionalCents: intEnv("MAX_DAILY_SUBMITTED_NOTIONAL_CENTS", 50000000),
   };
 }
 
@@ -56,7 +70,7 @@ function parseArgs(argv: string[]): SupervisorOptions {
     durationSeconds: intArg(args.get("durationSeconds"), 60),
     pollMs: intArg(args.get("pollMs"), 5000),
     confirmLive: boolArg(args.get("confirmLive"), false),
-    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3000",
+    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3001",
     devAdminUserId: stringArg(args.get("devAdminUserId")) ?? process.env.POLY_DEV_ADMIN_USER_ID ?? null,
   };
 }

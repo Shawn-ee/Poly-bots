@@ -278,7 +278,7 @@ async function testDryRunDoesNotCreateMarkets() {
       slug: null,
       outputPath: path.join(tempDir, "out.json"),
       mappingPath: path.join(tempDir, "map.json"),
-      baseUrl: "http://localhost:3000",
+      baseUrl: "http://127.0.0.1:3001",
       adminSessionCookie: null,
     },
     {
@@ -326,7 +326,7 @@ async function testSingleMarketImportBySlug() {
       slug: "ukraine-signs-peace-deal-with-russia-before-2027",
       outputPath: path.join(tempDir, "out.json"),
       mappingPath: path.join(tempDir, "map.json"),
-      baseUrl: "http://localhost:3000",
+      baseUrl: "http://127.0.0.1:3001",
       adminSessionCookie: null,
     },
     {
@@ -368,7 +368,7 @@ async function testCreateModeCreatesMappings() {
       slug: null,
       outputPath: path.join(tempDir, "out.json"),
       mappingPath: path.join(tempDir, "map.json"),
-      baseUrl: "http://localhost:3000",
+      baseUrl: "http://127.0.0.1:3001",
       adminSessionCookie: "next-auth.session-token=test",
     },
     {
@@ -426,7 +426,7 @@ async function testCreateModeIsIdempotent() {
     slug: null,
     outputPath: path.join(tempDir, "out.json"),
     mappingPath: path.join(tempDir, "map.json"),
-    baseUrl: "http://localhost:3000",
+    baseUrl: "http://127.0.0.1:3001",
     adminSessionCookie: "next-auth.session-token=test",
   };
 

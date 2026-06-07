@@ -214,7 +214,7 @@ function normalizeBotConfig(input: unknown, index: number): BotConfig {
   return {
     name,
     baseUrl: stringField(
-      bot.baseUrl ?? process.env.POLY_BOT_BASE_URL ?? "http://localhost:3000",
+      bot.baseUrl ?? process.env.POLY_BOT_BASE_URL ?? "http://127.0.0.1:3001",
       `${name}.baseUrl`,
     ),
     apiKey: stringField(bot.apiKey, `${name}.apiKey`),
@@ -683,7 +683,7 @@ function normalizeSimConfig(input: unknown): SimConfig {
   return {
     enabled: booleanField(sim.enabled ?? process.env.POLY_SIM_ENABLED ?? false, "sim.enabled"),
     baseUrl: stringField(
-      sim.baseUrl ?? process.env.POLY_SIM_BASE_URL ?? process.env.POLY_BOT_BASE_URL ?? "http://localhost:3000",
+      sim.baseUrl ?? process.env.POLY_SIM_BASE_URL ?? process.env.POLY_BOT_BASE_URL ?? "http://127.0.0.1:3001",
       "sim.baseUrl",
     ),
     sessionCookie: optionalStringField(

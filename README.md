@@ -4,7 +4,7 @@
 
 ## What It Does
 
-- Runs one or more deterministic, non-AI simulated traders against `http://localhost:3000`
+- Runs one or more deterministic, non-AI simulated traders against `http://127.0.0.1:3001`
 - Uses canonical routes only:
   - `GET /api/markets`
   - `GET /api/markets/:id/quote`
@@ -70,7 +70,7 @@ You can change this with `dailyNotionalPauseMode` if you want cooldown-until-res
 
 - Node.js 20+
 - API keys created inside the `Poly` exchange app
-- The `Poly` app running locally, usually at `http://localhost:3000`
+- The `Poly` app running locally, usually at `http://127.0.0.1:3001`
 
 ## Install
 

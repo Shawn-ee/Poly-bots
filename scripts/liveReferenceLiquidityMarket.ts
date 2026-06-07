@@ -206,7 +206,12 @@ function buildRiskConfig(options: ReturnType<typeof parseArgs>): LiveRiskConfig 
     minCashReserveCents: intEnv("MIN_CASH_RESERVE_CENTS", 20000),
     maxShareSize: numberEnv("MAX_SINGLE_ORDER_SIZE_SHARES", 10),
     minQuoteLifetimeMs: intEnv("MIN_QUOTE_LIFETIME_MS", 5000),
-    requoteThresholdTicks: intEnv("REQUOTE_THRESHOLD_TICKS", 1),
+    requoteThresholdTicks: intEnv("REQUOTE_THRESHOLD_TICKS", 2),
+    maxPerMarketExposureCents: intEnv("MAX_PER_MARKET_EXPOSURE_CENTS",
+      intEnv("MAX_LIQUIDITY_PER_MARKET_CENTS", 20000)),
+    maxGlobalExposureCents: intEnv("MAX_GLOBAL_EXPOSURE_CENTS", 6000000),
+    maxOpenOrdersPerMarket: intEnv("MAX_OPEN_ORDERS_PER_MARKET", 4),
+    maxDailySubmittedNotionalCents: intEnv("MAX_DAILY_SUBMITTED_NOTIONAL_CENTS", 50000000),
   };
 }
 
@@ -252,7 +257,7 @@ function parseArgs(argv: string[]) {
     confirmLive: boolArg(args.get("confirmLive"), false),
     leaveQuotes: boolArg(args.get("leaveQuotes"), false),
     cycleMs: intArg(args.get("cycleMs"), intEnv("LIQUIDITY_BOT_CYCLE_MS", 1500)),
-    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3000",
+    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3001",
     devAdminUserId: stringArg(args.get("devAdminUserId")) ?? process.env.POLY_DEV_ADMIN_USER_ID ?? null,
   };
 }

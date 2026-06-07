@@ -1,7 +1,7 @@
 [
   {
     "name": "maker-01",
-    "baseUrl": "http://localhost:3000",
+    "baseUrl": "http://127.0.0.1:3001",
     "apiKey": "pk_live_xxx.secret",
     "strategy": "tightMarketMaker",
     "marketIds": ["market-id-1"],
@@ -36,7 +36,7 @@
   },
   {
     "name": "noise-01",
-    "baseUrl": "http://localhost:3000",
+    "baseUrl": "http://127.0.0.1:3001",
     "apiKey": "pk_live_yyy.secret",
     "strategy": "noiseTrader",
     "marketIds": ["market-id-1"],
@@ -71,7 +71,7 @@
   },
   {
     "name": "inventory-maker-01",
-    "baseUrl": "http://localhost:3000",
+    "baseUrl": "http://127.0.0.1:3001",
     "apiKey": "pk_live_zzz.secret",
     "strategy": "inventoryAwareMaker",
     "marketIds": ["market-id-1"],
@@ -106,7 +106,7 @@
   },
   {
     "name": "dynamic-maker-01",
-    "baseUrl": "http://localhost:3000",
+    "baseUrl": "http://127.0.0.1:3001",
     "apiKey": "pk_live_dyn.secret",
     "strategy": "dynamicMarketMaker",
     "marketIds": ["market-id-1"],

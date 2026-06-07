@@ -261,6 +261,10 @@ function testLiveReadinessRequiresSeedAndFlags() {
       maxShareSize: 10,
       minQuoteLifetimeMs: 5000,
       requoteThresholdTicks: 1,
+      maxPerMarketExposureCents: 20000,
+      maxGlobalExposureCents: 6000000,
+      maxOpenOrdersPerMarket: 4,
+      maxDailySubmittedNotionalCents: 50000000,
     },
   });
   assert.equal(result.ready, true);
@@ -309,6 +313,10 @@ function testDesiredQuotesUseReferenceOffset() {
       maxShareSize: 10,
       minQuoteLifetimeMs: 5000,
       requoteThresholdTicks: 1,
+      maxPerMarketExposureCents: 20000,
+      maxGlobalExposureCents: 6000000,
+      maxOpenOrdersPerMarket: 4,
+      maxDailySubmittedNotionalCents: 50000000,
     },
     cycleTs: Date.now(),
   });
@@ -348,6 +356,10 @@ function testReconcileKeepsIdenticalOrder() {
     nowMs: Date.now(),
     minQuoteLifetimeMs: 5000,
     requoteThresholdTicks: 1,
+    maxPerMarketExposureCents: 20000,
+    maxGlobalExposureCents: 6000000,
+    maxOpenOrdersPerMarket: 4,
+    maxDailySubmittedNotionalCents: 50000000,
     tickSize: "0.01",
   });
   assert.equal(result.toCancel.length, 0);
@@ -515,6 +527,10 @@ function testMissingRiskCapsBlockTransition() {
       maxShareSize: 10,
       minQuoteLifetimeMs: 5000,
       requoteThresholdTicks: 1,
+      maxPerMarketExposureCents: 20000,
+      maxGlobalExposureCents: 6000000,
+      maxOpenOrdersPerMarket: 4,
+      maxDailySubmittedNotionalCents: 50000000,
     },
   });
   assert.equal(readiness.ready, false);
@@ -551,6 +567,10 @@ function healthyLiveReadiness(status: string = "live_enabled", emergencyStop = f
       maxShareSize: 10,
       minQuoteLifetimeMs: 5000,
       requoteThresholdTicks: 1,
+      maxPerMarketExposureCents: 20000,
+      maxGlobalExposureCents: 6000000,
+      maxOpenOrdersPerMarket: 4,
+      maxDailySubmittedNotionalCents: 50000000,
     },
   });
 }
@@ -778,7 +798,7 @@ function testBotConfig(overrides: Partial<ReturnType<typeof testBotConfigBase>> 
 function testBotConfigBase() {
   return loadConfig(process.cwd(), { requireBots: false }).bots[0] ?? {
     name: "referenceAwareSystemLiquidityDryRun",
-    baseUrl: "http://127.0.0.1:3000",
+    baseUrl: "http://127.0.0.1:3001",
     apiKey: "test-key",
     strategy: "tightMarketMaker" as const,
     marketIds: ["local-market-1"],

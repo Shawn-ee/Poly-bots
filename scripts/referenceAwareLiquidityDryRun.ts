@@ -291,7 +291,7 @@ function parseArgs(argv: string[]) {
     durationSeconds: intArg(args.get("durationSeconds"), 60),
     pollIntervalMs: intArg(args.get("pollIntervalMs"), 5000),
     tickSize: stringArg(args.get("tickSize")) ?? "0.01",
-    baseUrl: stringArg(args.get("baseUrl")) ?? "http://localhost:3000",
+    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3001",
   };
 }
 

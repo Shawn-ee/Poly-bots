@@ -64,7 +64,7 @@ function parseArgs(argv: string[]) {
     confirmEnable: boolArg(args.get("confirmEnable"), false),
     maxMarkets: intArg(args.get("maxMarkets"), 0) || null,
     allowlist: parseAllowlist(stringArg(args.get("allowlist"))),
-    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3000",
+    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3001",
     devAdminUserId: stringArg(args.get("devAdminUserId")) ?? process.env.POLY_DEV_ADMIN_USER_ID ?? null,
   };
 }

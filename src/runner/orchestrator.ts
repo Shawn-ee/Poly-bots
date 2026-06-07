@@ -1,8 +1,47 @@
 import { setMaxListeners } from "node:events";
 import path from "node:path";
 import { AppConfig } from "../config/loadConfig.js";
+import { AGENT_POLICY_DEFAULTS } from "../agents/policies.js";
 import { sleep } from "../utils/sleep.js";
 import { BotRunner } from "./botRunner.js";
+
+export type HybridOrchestratorStatus = {
+  deterministicBots: Array<{
+    name: string;
+    strategy: string;
+    marketCount: number;
+  }>;
+  reasoningAgents: {
+    enabledByDefault: false;
+    defaultMode: "dryRun";
+    canPlaceLiveOrders: false;
+    canMoveFunds: false;
+    canResolveMarkets: false;
+    notes: string[];
+  };
+};
+
+export function buildHybridOrchestratorStatus(config: AppConfig): HybridOrchestratorStatus {
+  return {
+    deterministicBots: config.bots.map((bot) => ({
+      name: bot.name,
+      strategy: bot.strategy,
+      marketCount: bot.marketIds.length,
+    })),
+    reasoningAgents: {
+      enabledByDefault: false,
+      defaultMode: "dryRun",
+      canPlaceLiveOrders: AGENT_POLICY_DEFAULTS.canAgentPlaceLiveOrders,
+      canMoveFunds: AGENT_POLICY_DEFAULTS.canAgentMoveFunds,
+      canResolveMarkets: AGENT_POLICY_DEFAULTS.canAgentResolveMarket,
+      notes: [
+        "Agents are reasoning/review coordinators.",
+        "The orchestrator does not execute dangerous agent recommendations automatically.",
+        "Deterministic bots remain the only trading executors and still pass through existing risk checks.",
+      ],
+    },
+  };
+}
 
 export async function runOrchestrator(config: AppConfig): Promise<void> {
   const controller = new AbortController();

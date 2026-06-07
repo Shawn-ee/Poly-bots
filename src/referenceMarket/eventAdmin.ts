@@ -4,13 +4,15 @@ import type { AdminReferenceMarketItem } from "../api/types.js";
 
 export function createAdminApi(baseUrl: string, devAdminUserId: string | null) {
   const sessionCookie = process.env.POLY_SIM_SESSION_COOKIE ?? "";
-  if (!sessionCookie.trim() && !devAdminUserId?.trim()) {
-    throw new Error("POLY_SIM_SESSION_COOKIE or POLY_DEV_ADMIN_USER_ID is required.");
+  const internalAdminKey = process.env.INTERNAL_ADMIN_API_KEY ?? "";
+  if (!internalAdminKey.trim() && !sessionCookie.trim() && !devAdminUserId?.trim()) {
+    throw new Error("INTERNAL_ADMIN_API_KEY, POLY_SIM_SESSION_COOKIE, or POLY_DEV_ADMIN_USER_ID is required.");
   }
   const extraHeaders = devAdminUserId?.trim() ? { "x-dev-admin-user-id": devAdminUserId.trim() } : {};
   return new ApiClient(baseUrl, sessionCookie.trim() ? sessionCookie : "dev-admin", {
     authMode: "cookie",
     cookieName: "poly_session",
+    internalAdminKey,
     extraHeaders,
   });
 }
@@ -25,13 +27,13 @@ export async function ensureAdminApiAccess(api: ApiClient, params: {
       importStatus: "approved",
     });
   } catch (error) {
-    if (error instanceof PolyApiError && error.status === 403) {
+    if (error instanceof PolyApiError && (error.status === 401 || error.status === 403)) {
       const configuredUser = params.devAdminUserId?.trim();
       const details = configuredUser
         ? `POLY_DEV_ADMIN_USER_ID=${configuredUser} was rejected by ${params.baseUrl}.`
         : `The admin session for ${params.baseUrl} was rejected.`;
       throw new Error(
-        `${details} The target app only accepts a real admin user id from its current database in non-production mode, or a valid poly_session cookie.`,
+        `${details} The target app requires INTERNAL_ADMIN_API_KEY, a valid admin poly_session cookie, or a non-production dev admin user id.`,
       );
     }
     throw error;

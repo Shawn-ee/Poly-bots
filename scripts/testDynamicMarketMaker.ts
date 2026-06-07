@@ -410,7 +410,7 @@ function createContext(
 function createBotConfig(overrides: Partial<BotConfig> = {}): BotConfig {
   const base: BotConfig = {
     name: "dynamic-mm-test",
-    baseUrl: "http://localhost:3000",
+    baseUrl: "http://127.0.0.1:3001",
     apiKey: "test.secret",
     strategy: "dynamicMarketMaker",
     marketIds: ["market-1"],

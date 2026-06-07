@@ -4,6 +4,7 @@ export type ReferenceQualityStatus =
   | "high_quality"
   | "stale"
   | "wide"
+  | "wide_spread"
   | "missing_book"
   | "invalid_price"
   | "not_approved"
@@ -185,4 +186,91 @@ export type ImportWorldCupResult = {
   createLocalMarkets: boolean;
   createEvents: boolean;
   status: "draft" | "paused" | "live";
+};
+
+export type DiscoveryVertical = "nba" | "world_cup";
+export type DiscoveryRejectionReason =
+  | "not_allowed_vertical"
+  | "excluded_topic"
+  | "generic_soccer"
+  | "inactive_or_resolved"
+  | "missing_reference_tokens"
+  | "unsupported_outcomes"
+  | "low_liquidity"
+  | "low_volume"
+  | "wide_spread"
+  | "duplicate"
+  | "import_cap_reached";
+
+export type DiscoveryQualityStatus = "high_quality" | "stale" | "wide_spread" | "missing_book";
+
+export type MarketDiscoveryScoreBreakdown = {
+  volume: number;
+  liquidity: number;
+  spreadQuality: number;
+  recentActivity: number;
+  activeStatus: number;
+  cleanOutcomeMapping: number;
+  categoryMatchStrength: number;
+  duplicateRisk: number;
+};
+
+export type MarketDiscoveryCandidate = {
+  candidate: ReferenceMarketCandidate;
+  vertical: DiscoveryVertical;
+  score: number;
+  scoreBreakdown: MarketDiscoveryScoreBreakdown;
+  qualityStatus: DiscoveryQualityStatus;
+  sourceUrl: string;
+  accepted: boolean;
+  rejectedReason: DiscoveryRejectionReason | null;
+  duplicateKeys: string[];
+  draftCreationStatus: "not_requested" | "dry_run" | "created" | "skipped" | "failed";
+};
+
+export type MarketDiscoveryOptions = {
+  enabled: boolean;
+  dryRun: boolean;
+  topN: number;
+  maxImportedMarkets: number;
+  maxNewImportsPerRun: number;
+  allowedVerticals: DiscoveryVertical[];
+  minReferenceLiquidity: number | null;
+  minReferenceVolume: number | null;
+  maxReferenceSpread: number;
+  outputPath: string;
+  mappingPath: string;
+  baseUrl: string;
+  adminSessionCookie: string | null;
+  createDrafts: boolean;
+  createEvents: boolean;
+};
+
+export type MarketDiscoveryResult = {
+  fetchedAt: string;
+  enabled: boolean;
+  dryRun: boolean;
+  allowedVerticals: DiscoveryVertical[];
+  totalFetched: number;
+  totalAccepted: number;
+  totalRejected: number;
+  currentImportedCount: number;
+  maxImportedMarkets: number;
+  maxNewImportsPerRun: number;
+  candidates: MarketDiscoveryCandidate[];
+  importedDrafts: Array<{
+    localMarketId: string;
+    externalMarketId: string;
+    externalSlug: string | null;
+    title: string;
+    created: boolean;
+  }>;
+  skippedImports: Array<{
+    externalMarketId: string;
+    externalSlug: string | null;
+    title: string;
+    reason: DiscoveryRejectionReason | "dry_run" | "disabled";
+  }>;
+  outputPath: string;
+  mappingPath: string;
 };

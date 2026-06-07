@@ -9,6 +9,7 @@ logs/
 !.env.example
 bots.json
 generated.bots.json
+live-internal*.json
 .runtime/
 test-logs/
 reference-arb.dry-run.json
@@ -21,3 +22,4 @@ secrets/
 secret/
 private-keys/
 *secret*.json
+*.backup.*

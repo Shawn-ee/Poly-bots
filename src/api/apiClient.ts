@@ -46,6 +46,7 @@ type RequestOptions = {
 type ApiClientOptions = {
   authMode?: "bearer" | "cookie";
   cookieName?: string;
+  internalAdminKey?: string;
   extraHeaders?: Record<string, string>;
 };
 
@@ -89,6 +90,7 @@ export class ApiClient {
   private readonly credential: string;
   private readonly authMode: "bearer" | "cookie";
   private readonly cookieName: string;
+  private readonly internalAdminKey: string;
   private readonly extraHeaders: Record<string, string>;
 
   constructor(baseUrl: string, credential: string, options: ApiClientOptions = {}) {
@@ -96,6 +98,7 @@ export class ApiClient {
     this.credential = credential;
     this.authMode = options.authMode ?? "bearer";
     this.cookieName = options.cookieName ?? "poly_session";
+    this.internalAdminKey = options.internalAdminKey ?? "";
     this.extraHeaders = options.extraHeaders ?? {};
   }
 
@@ -322,6 +325,12 @@ export class ApiClient {
   }
 
   private authHeaders(): Record<string, string> {
+    if (this.internalAdminKey.trim()) {
+      return {
+        "X-Internal-Admin-Key": this.internalAdminKey.trim(),
+      };
+    }
+
     if (this.authMode === "cookie") {
       const cookieValue = this.credential.startsWith(`${this.cookieName}=`)
         ? this.credential

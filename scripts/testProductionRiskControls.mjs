@@ -6,7 +6,7 @@ import { BotRiskManager } from "../dist/runner/botRiskManager.js";
 function createBotConfig(overrides = {}) {
   const base = {
     name: "risk-test-bot",
-    baseUrl: "http://localhost:3000",
+    baseUrl: "http://127.0.0.1:3001",
     apiKey: "test.secret",
     strategy: "dynamicMarketMaker",
     marketIds: ["market-1"],

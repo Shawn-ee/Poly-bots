@@ -143,7 +143,7 @@ function parseArgs(argv: string[]): Options {
     tickSize: stringArg(args.get("tickSize")) ?? process.env.TICK_SIZE ?? "0.01",
     quoteOffsetTicks: intArg(args.get("quoteOffsetTicks"), Number(process.env.QUOTE_OFFSET_TICKS ?? "2")),
     maxInitialOrderSize: stringArg(args.get("maxInitialOrderSize")) ?? "5.000000",
-    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3000",
+    baseUrl: stringArg(args.get("baseUrl")) ?? "http://127.0.0.1:3001",
     devAdminUserId: stringArg(args.get("devAdminUserId")),
   };
 }

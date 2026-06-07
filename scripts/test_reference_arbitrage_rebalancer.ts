@@ -388,7 +388,7 @@ function createContext(overrides: Partial<ReferenceArbitrageContext> = {}): Refe
 function createBotConfig(overrides: Partial<BotConfig> = {}): BotConfig {
   return {
     name: "reference-arb-test",
-    baseUrl: "http://localhost:3000",
+    baseUrl: "http://127.0.0.1:3001",
     apiKey: "test-key",
     strategy: "referenceArbitrageRebalancer",
     marketIds: ["market-1"],

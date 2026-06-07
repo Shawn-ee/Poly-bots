@@ -55,6 +55,23 @@ export class PolymarketGammaClient {
       .slice(0, params.limit);
   }
 
+  async searchMarkets(params: {
+    query: string;
+    limit: number;
+    sortBy?: "volume" | "liquidity" | "updatedAt";
+    activeOnly?: boolean;
+  }): Promise<ReferenceMarketCandidate[]> {
+    const page = await this.fetchMarketsPage(params.query, params.limit, {
+      activeOnly: params.activeOnly ?? true,
+      sortBy: params.sortBy ?? "volume",
+    });
+    return page
+      .map((wire) => normalizeGammaMarket(wire))
+      .filter((candidate): candidate is ReferenceMarketCandidate => candidate != null)
+      .sort(compareCandidates)
+      .slice(0, params.limit);
+  }
+
   async getMarketBySlug(slug: string): Promise<ReferenceMarketCandidate | null> {
     const url = new URL("/markets", this.baseUrl);
     url.searchParams.set("slug", slug);
@@ -75,13 +92,26 @@ export class PolymarketGammaClient {
     return first ? normalizeGammaMarket(first) : null;
   }
 
-  private async fetchMarketsPage(query: string, limit: number): Promise<GammaMarketWire[]> {
+  private async fetchMarketsPage(
+    query: string,
+    limit: number,
+    options: {
+      activeOnly?: boolean;
+      sortBy?: "volume" | "liquidity" | "updatedAt";
+    } = {},
+  ): Promise<GammaMarketWire[]> {
     const url = new URL("/markets", this.baseUrl);
     url.searchParams.set("limit", String(limit));
-    url.searchParams.set("active", "true");
-    url.searchParams.set("closed", "false");
-    url.searchParams.set("archived", "false");
+    if (options.activeOnly ?? true) {
+      url.searchParams.set("active", "true");
+      url.searchParams.set("closed", "false");
+      url.searchParams.set("archived", "false");
+    }
     url.searchParams.set("search", query);
+    if (options.sortBy) {
+      url.searchParams.set("order", options.sortBy);
+      url.searchParams.set("ascending", "false");
+    }
 
     const response = await this.fetchImpl(url.toString(), {
       headers: { Accept: "application/json" },

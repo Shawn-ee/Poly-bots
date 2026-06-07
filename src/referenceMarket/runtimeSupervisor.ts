@@ -38,6 +38,20 @@ export type RuntimeCycleReport = {
   plannedBotAsk: number | null;
   reasons: string[];
   openOrderCount: number;
+  /** Per-market exposure in cents (open orders + inventory). */
+  perMarketExposureCents: number;
+  /** Open order notional in cents. */
+  openOrderNotionalCents: number;
+  /** Inventory exposure in cents. */
+  inventoryExposureCents: number;
+  /** Global exposure so far in this cycle (sum across processed markets). */
+  globalExposureCents: number;
+  /** Max global exposure cap. */
+  maxGlobalExposureCents: number;
+  /** Quote reconciliation skip/cancel/replace reasons. */
+  quoteActions: string[];
+  /** Per-market exposure cap. */
+  perMarketExposureCapCents: number;
 };
 
 export function determineRuntimeDecision(params: {
@@ -125,10 +139,40 @@ export async function runRuntimeSupervisor(
   const startedAt = Date.now();
   const deadline = startedAt + options.durationSeconds * 1000;
   const cycleReports: RuntimeCycleReport[] = [];
+  const globalExposureCap = deps.risk.maxGlobalExposureCents;
 
   while (Date.now() < deadline) {
     const markets = await loadManagedMarkets(deps.adminApi, options);
+    let globalExposureCents = 0;
+
     for (const market of markets) {
+      // --- Global exposure check: skip remaining markets if cap reached ---
+      if (globalExposureCap > 0 && globalExposureCents >= globalExposureCap) {
+        cycleReports.push({
+          marketId: market.id,
+          slug: market.externalSlug,
+          status: "skip",
+          previousLifecycleStatus: market.botInitialization?.status ?? "not_started",
+          currentLifecycleStatus: market.botInitialization?.status ?? "not_started",
+          lifecycleTransition: null,
+          dryRun,
+          referenceBid: null,
+          referenceAsk: null,
+          plannedBotBid: null,
+          plannedBotAsk: null,
+          reasons: [`global_exposure_cap_reached_${globalExposureCents}_of_${globalExposureCap}`],
+          openOrderCount: 0,
+          perMarketExposureCents: 0,
+          openOrderNotionalCents: 0,
+          inventoryExposureCents: 0,
+          globalExposureCents,
+          maxGlobalExposureCents: globalExposureCap,
+          quoteActions: [],
+          perMarketExposureCapCents: deps.risk.maxPerMarketExposureCents,
+        });
+        continue;
+      }
+
       await deps.adminApi.refreshAdminReferenceMarketSnapshot(market.id);
       let freshMarket = (await loadManagedMarkets(deps.adminApi, { ...options, marketId: market.id, slug: null }))[0] ?? market;
       const reference = await deps.adminApi.getMarketReferencePlan(market.id);
@@ -232,7 +276,7 @@ export async function runRuntimeSupervisor(
           risk: deps.risk,
           cycleTs: Date.now(),
         });
-        const { toCancel, toPlace } = reconcileQuotes({
+        const reconciliation = reconcileQuotes({
           desired,
           openOrders,
           nowMs: Date.now(),
@@ -240,10 +284,10 @@ export async function runRuntimeSupervisor(
           requoteThresholdTicks: deps.risk.requoteThresholdTicks,
           tickSize: deps.risk.tickSize,
         });
-        for (const order of toCancel) {
+        for (const order of reconciliation.toCancel) {
           await botApi.cancelOrder(order.id);
         }
-        for (const quote of toPlace) {
+        for (const quote of reconciliation.toPlace) {
           await botApi.placeLimitOrder(
             {
               marketId: market.id,
@@ -255,23 +299,55 @@ export async function runRuntimeSupervisor(
             quote.idempotencyKey,
           );
         }
-      }
+        // Track global exposure from this market
+        globalExposureCents += readiness.perMarketExposureCents;
 
-      cycleReports.push({
-        marketId: market.id,
-        slug: market.externalSlug,
-        status: decision.action,
-        previousLifecycleStatus,
-        currentLifecycleStatus: freshMarket.botInitialization?.status ?? "not_started",
-        lifecycleTransition,
-        dryRun,
-        referenceBid: readiness.referenceBid,
-        referenceAsk: readiness.referenceAsk,
-        plannedBotBid: readiness.plannedBotBid,
-        plannedBotAsk: readiness.plannedBotAsk,
-        reasons: decision.reasons,
-        openOrderCount: openOrders.length,
-      });
+        cycleReports.push({
+          marketId: market.id,
+          slug: market.externalSlug,
+          status: decision.action,
+          previousLifecycleStatus,
+          currentLifecycleStatus: freshMarket.botInitialization?.status ?? "not_started",
+          lifecycleTransition,
+          dryRun,
+          referenceBid: readiness.referenceBid,
+          referenceAsk: readiness.referenceAsk,
+          plannedBotBid: readiness.plannedBotBid,
+          plannedBotAsk: readiness.plannedBotAsk,
+          reasons: decision.reasons,
+          openOrderCount: openOrders.length,
+          perMarketExposureCents: readiness.perMarketExposureCents,
+          openOrderNotionalCents: readiness.openOrderNotionalCents,
+          inventoryExposureCents: readiness.inventoryExposureCents,
+          globalExposureCents,
+          maxGlobalExposureCents: globalExposureCap,
+          quoteActions: reconciliation.skipReasons,
+          perMarketExposureCapCents: deps.risk.maxPerMarketExposureCents,
+        });
+      } else {
+        cycleReports.push({
+          marketId: market.id,
+          slug: market.externalSlug,
+          status: decision.action,
+          previousLifecycleStatus,
+          currentLifecycleStatus: freshMarket.botInitialization?.status ?? "not_started",
+          lifecycleTransition,
+          dryRun,
+          referenceBid: readiness.referenceBid,
+          referenceAsk: readiness.referenceAsk,
+          plannedBotBid: readiness.plannedBotBid,
+          plannedBotAsk: readiness.plannedBotAsk,
+          reasons: decision.reasons,
+          openOrderCount: openOrders.length,
+          perMarketExposureCents: readiness.perMarketExposureCents,
+          openOrderNotionalCents: readiness.openOrderNotionalCents,
+          inventoryExposureCents: readiness.inventoryExposureCents,
+          globalExposureCents,
+          maxGlobalExposureCents: globalExposureCap,
+          quoteActions: [],
+          perMarketExposureCapCents: deps.risk.maxPerMarketExposureCents,
+        });
+      }
     }
 
     await sleep(options.pollMs);

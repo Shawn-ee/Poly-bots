@@ -6,7 +6,9 @@ export type LiveRiskConfig = {
   maxReferenceSpread: number;
   quoteOffsetTicks: number;
   tickSize: string;
+  /** Per-order size cap in cents. Default $10 for beta. */
   maxSingleOrderNotionalCents: number;
+  /** DEPRECATED: replaced by maxPerMarketExposureCents. Keep for backward compat. */
   maxOpenOrderNotionalCents: number;
   maxDailyLossCents: number;
   maxInventoryPerOutcome: number;
@@ -14,7 +16,16 @@ export type LiveRiskConfig = {
   minCashReserveCents: number;
   maxShareSize: number;
   minQuoteLifetimeMs: number;
+  /** Minimum tick movement before a quote is eligible for replacement. */
   requoteThresholdTicks: number;
+  /** Per-market max exposure (open orders + inventory) in cents. Default $200 for beta. */
+  maxPerMarketExposureCents: number;
+  /** Global max exposure across all managed markets in cents. Default $60,000 for 300-market scale. */
+  maxGlobalExposureCents: number;
+  /** Max open orders per market. Default 4. */
+  maxOpenOrdersPerMarket: number;
+  /** Max daily submitted notional (anti-spam guard, not exposure limit). */
+  maxDailySubmittedNotionalCents: number;
 };
 
 export type LiveReadinessResult = {
@@ -25,8 +36,15 @@ export type LiveReadinessResult = {
   plannedBotBid: number | null;
   plannedBotAsk: number | null;
   mmEligible: boolean;
+  /** Current open order notional for this market in cents (exposure, not submitted). */
   openOrderNotionalCents: number;
+  /** Current inventory exposure for this market in cents. */
+  inventoryExposureCents: number;
+  /** Total per-market exposure (open orders + inventory) in cents. */
+  perMarketExposureCents: number;
   dailyLossCents: number;
+  skipReason: string | null;
+  quoteReplacementReason: string | null;
 };
 
 export type DesiredQuote = {
@@ -103,15 +121,43 @@ export function evaluateLiveReadiness(params: {
     }
   }
 
+  // --- Exposure calculations (actual risk, NOT submitted notional) ---
   const openOrderNotionalCents = params.openOrders.reduce(
     (sum, order) => sum + Math.round(Number(order.reservedNotional) * 100),
     0,
   );
+  // Inventory exposure: sum of absolute position values × current reference price
+  const inventoryExposureCents = params.positions.reduce((sum, position) => {
+    const shares = Math.abs(Number(position.shares ?? 0));
+    const price =
+      position.outcomeName?.trim().toUpperCase() === "YES"
+        ? (yesOutcome?.referenceAsk ?? yesOutcome?.gammaOutcomePrice ?? 0.5)
+        : position.outcomeName?.trim().toUpperCase() === "NO"
+          ? (1 - (yesOutcome?.referenceBid ?? yesOutcome?.gammaOutcomePrice ?? 0.5))
+          : 0.5;
+    return sum + Math.round(shares * price * 100);
+  }, 0);
+  const perMarketExposureCents = openOrderNotionalCents + inventoryExposureCents;
+
   const dailyLossCents = Math.max(
     0,
     Math.round(params.positions.reduce((sum, position) => sum + Math.min(0, Number(position.realizedPnl ?? 0)), 0) * -100),
   );
-  if (openOrderNotionalCents >= params.risk.maxOpenOrderNotionalCents) reasons.push("max_open_order_notional_reached");
+
+  // --- Risk checks ---
+  // Per-market exposure cap (primary risk limit)
+  const perMarketCap = params.risk.maxPerMarketExposureCents;
+  if (perMarketCap > 0 && perMarketExposureCents >= perMarketCap) {
+    reasons.push(`per_market_exposure_cap_reached_${perMarketExposureCents}_of_${perMarketCap}`);
+  }
+  // Open orders per market cap
+  if (params.risk.maxOpenOrdersPerMarket > 0 && params.openOrders.length >= params.risk.maxOpenOrdersPerMarket) {
+    reasons.push(`max_open_orders_per_market_${params.openOrders.length}_of_${params.risk.maxOpenOrdersPerMarket}`);
+  }
+  // Legacy open order notional cap (still checked for backward compat)
+  if (params.risk.maxOpenOrderNotionalCents > 0 && openOrderNotionalCents >= params.risk.maxOpenOrderNotionalCents) {
+    reasons.push("max_open_order_notional_reached");
+  }
   if (dailyLossCents >= params.risk.maxDailyLossCents) reasons.push("daily_loss_limit_reached");
 
   return {
@@ -123,7 +169,11 @@ export function evaluateLiveReadiness(params: {
     plannedBotAsk: yesOutcome?.plannedBotAsk ?? null,
     mmEligible: yesOutcome?.mmEligible ?? false,
     openOrderNotionalCents,
+    inventoryExposureCents,
+    perMarketExposureCents,
     dailyLossCents,
+    skipReason: reasons.length > 0 ? reasons.join("; ") : null,
+    quoteReplacementReason: null,
   };
 }
 
@@ -233,6 +283,12 @@ function deriveReferencePair(
   };
 }
 
+export type QuoteReconciliationReport = {
+  toCancel: Order[];
+  toPlace: DesiredQuote[];
+  skipReasons: string[];
+};
+
 export function reconcileQuotes(params: {
   desired: DesiredQuote[];
   openOrders: Order[];
@@ -240,38 +296,55 @@ export function reconcileQuotes(params: {
   minQuoteLifetimeMs: number;
   requoteThresholdTicks: number;
   tickSize: string;
-}) {
+}): QuoteReconciliationReport {
   const desiredByKey = new Map(params.desired.map((entry) => [`${entry.outcomeId}:${entry.side}`, entry]));
   const toCancel: Order[] = [];
   const toPlace: DesiredQuote[] = [];
+  const skipReasons: string[] = [];
 
   for (const order of params.openOrders) {
     const desired = desiredByKey.get(`${order.outcomeId}:${order.side}`);
     if (!desired) {
+      // No longer desired (e.g., market skipped, reference stale)
       toCancel.push(order);
       continue;
     }
     const ageMs = params.nowMs - Date.parse(order.createdAt ?? new Date(0).toISOString());
     const tickDelta = Math.abs(Number(desired.price) - Number(order.price)) / Number(params.tickSize);
     const sizeChanged = Math.abs(Number(desired.size) - Number(order.remaining)) > 0.000001;
+
+    // Quote is still perfect — keep it, don't churn
     if (Number(order.price) === Number(desired.price) && !sizeChanged) {
       desiredByKey.delete(`${order.outcomeId}:${order.side}`);
+      skipReasons.push(`kept ${order.outcomeId}:${order.side} @ ${order.price} (unchanged)`);
       continue;
     }
+
+    // Quote needs replacement: check lifetime and threshold
     if (ageMs >= params.minQuoteLifetimeMs && (tickDelta >= params.requoteThresholdTicks || sizeChanged)) {
       toCancel.push(order);
       desiredByKey.delete(`${order.outcomeId}:${order.side}`);
       toPlace.push(desired);
+      skipReasons.push(`replacing ${order.outcomeId}:${order.side} from ${order.price} → ${desired.price} (${tickDelta.toFixed(1)} ticks, age ${ageMs}ms)`);
       continue;
+    }
+
+    // Below requote threshold or too young — skip replacement to avoid churn
+    if (tickDelta < params.requoteThresholdTicks) {
+      skipReasons.push(`skipped requote ${order.outcomeId}:${order.side} @ ${order.price} (delta ${tickDelta.toFixed(1)} ticks < ${params.requoteThresholdTicks} threshold)`);
+    } else if (ageMs < params.minQuoteLifetimeMs) {
+      skipReasons.push(`skipped requote ${order.outcomeId}:${order.side} (age ${ageMs}ms < ${params.minQuoteLifetimeMs}ms min lifetime)`);
     }
     desiredByKey.delete(`${order.outcomeId}:${order.side}`);
   }
 
+  // New quotes (no existing order for this outcome:side)
   for (const desired of desiredByKey.values()) {
     toPlace.push(desired);
+    skipReasons.push(`new quote ${desired.outcomeId}:${desired.side} @ ${desired.price}`);
   }
 
-  return { toCancel, toPlace };
+  return { toCancel, toPlace, skipReasons };
 }
 
 function computeOrderSize(params: {
