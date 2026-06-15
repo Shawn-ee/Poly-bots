@@ -23,6 +23,11 @@ echo "No obvious secrets found."
 
 run_if_present() {
   local name="$1"
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "Skipping npm run ${name}: node or npm is not available on PATH."
+    return
+  fi
+
   if node -e "const p=require('./package.json'); process.exit(p.scripts && p.scripts['${name}'] ? 0 : 1)"; then
     echo "Running npm run ${name}"
     npm run "$name"
