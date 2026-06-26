@@ -23,6 +23,7 @@
     "test:production-risk-controls": "npm run build && node scripts/testProductionRiskControls.mjs",
     "test:reference-market-import": "tsx scripts/testReferenceMarketImport.ts",
     "test:reference-liquidity": "tsx scripts/testReferenceLiquidity.ts",
+    "test:world-cup-market-making-guardrails": "tsx scripts/testWorldCupMarketMakingGuardrails.ts",
     "test:agent-architecture": "tsx scripts/testAgentArchitecture.ts",
     "agents:dry-run": "tsx src/runner/agentRunner.ts --mode dryRun",
     "agent:market-discovery": "tsx src/runner/agentRunner.ts --agent marketDiscovery --mode dryRun",
