@@ -52,7 +52,14 @@
     "bots:restart-clean": "tsx scripts/botsReset.ts --restart",
     "bots:control": "tsx scripts/botControl.ts",
     "import:polymarket-worldcup": "tsx scripts/importPolymarketWorldCup.ts",
-    "import:polymarket-market": "tsx scripts/importPolymarketMarket.ts"
+    "import:polymarket-market": "tsx scripts/importPolymarketMarket.ts",
+    "bot:polymarket:discover": "tsx scripts/importPolymarketWorldCup.ts --dry-run true",
+    "bot:polymarket:reference-sync": "tsx scripts/polymarketReferenceSyncBot.ts",
+    "bot:polymarket:mm:dry-run": "tsx scripts/liquidityRuntime.ts --dryRun true",
+    "bot:polymarket:mm:live-local": "tsx scripts/liquidityRuntime.ts --dryRun false --confirmLive true",
+    "bot:risk:stale-quotes": "tsx scripts/polymarketRiskStaleQuotesBot.ts",
+    "bot:resolution:proposal": "tsx scripts/resolutionProposalBot.ts",
+    "bot:ops:report": "tsx scripts/polymarketOpsReportBot.ts"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",
