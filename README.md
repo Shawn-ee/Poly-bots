@@ -175,6 +175,20 @@ npm start
 
 ## Reference Liquidity Runbook
 
+Final Polymarket-reference MM command names:
+
+```bash
+npm run bot:polymarket:discover
+npm run bot:polymarket:reference-sync -- --slug <polymarket-slug>
+npm run bot:polymarket:mm:dry-run
+npm run bot:polymarket:mm:live-local
+npm run bot:risk:stale-quotes
+npm run bot:resolution:proposal
+npm run bot:ops:report
+```
+
+These commands are aliases or thin wrappers around the existing deterministic bot/runtime code. They do not place orders on Polymarket. Local live quote placement still goes through the Poly canonical API and requires the existing runtime/live flags.
+
 Local reference-market supervision uses three terminals:
 
 Terminal 1:

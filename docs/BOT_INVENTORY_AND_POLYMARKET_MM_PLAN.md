@@ -87,3 +87,35 @@ Polymarket Discovery -> Import Candidates -> Internal Event/Market/Outcome -> Ma
 - Merge: duplicate strategy shims can stay until tests prove all imports use category paths.
 - Delete later only after proof: any old simulation-only scripts that are unreferenced by package scripts, docs, systemd/orchestrator files, imports, and tests.
 - Tests required before deletion: `npm run build`, relevant `tsx scripts/test*.ts`, package script dry-runs, and `rg` dependency scans.
+
+## Phase 7 Refactor Checkpoint
+
+Timestamp: 2026-06-27T23:10:00-05:00
+Branch: `agent/polymarket-mm-phase7-refactor`
+
+Final architecture command aliases added:
+
+- `npm run bot:polymarket:discover`
+- `npm run bot:polymarket:reference-sync`
+- `npm run bot:polymarket:mm:dry-run`
+- `npm run bot:polymarket:mm:live-local`
+- `npm run bot:risk:stale-quotes`
+- `npm run bot:resolution:proposal`
+- `npm run bot:ops:report`
+
+Dependency audit result:
+
+- No bot code was deleted in Phase 7.
+- `scripts/slow_down_sim_bots.js` and `scripts/slow_down_sim_bots.cjs` remain present because simulation docs and original checkout state made usage ambiguous enough to avoid deletion.
+- Legacy strategy re-export shims remain because docs explicitly preserve old import paths and tests still reference top-level strategy modules.
+- User simulation/noise trader code remains dev-only and must not be used for final product liquidity, fake volume, or fake users.
+- Reference arbitrage observer remains observation-only and does not place orders.
+
+Final bot mapping:
+
+- Polymarket Discovery Bot: `bot:polymarket:discover`, `import:polymarket-worldcup`, `agent:market-discovery`.
+- Polymarket Reference Price Sync Bot: `bot:polymarket:reference-sync`, `reference:cache-dry-run`, `ReferencePriceUpdater`.
+- Reference Market Maker Bot: `bot:polymarket:mm:dry-run`, `bot:polymarket:mm:live-local`, `liquidity:runtime`.
+- Risk/Stale Quote Bot: `bot:risk:stale-quotes`, `bots:safety`, runtime readiness checks.
+- Resolution Proposal Bot: `bot:resolution:proposal`, `resolutionReviewAgent`.
+- Ops Reporter Bot: `bot:ops:report`, runtime record inspection.
