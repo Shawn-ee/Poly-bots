@@ -1,4 +1,4 @@
-import { ApiClient } from "../api/apiClient.js";
+import { ApiClient, PolyApiError } from "../api/apiClient.js";
 import { AdminReferenceMarketItem, Balance, MarketReferencePlanResponse, Order, Position, QuoteResponse } from "../api/types.js";
 import { buildDesiredQuotes, evaluateLiveReadiness, reconcileQuotes, type LiveRiskConfig } from "./liveMarketMaker.js";
 import { readReferenceLiveRuntimeRecord } from "./runtimeFile.js";
@@ -287,17 +287,23 @@ export async function runRuntimeSupervisor(
         for (const order of reconciliation.toCancel) {
           await botApi.cancelOrder(order.id);
         }
+        const quoteActions = [...reconciliation.skipReasons];
         for (const quote of reconciliation.toPlace) {
-          await botApi.placeLimitOrder(
-            {
-              marketId: market.id,
-              outcomeId: quote.outcomeId,
-              side: quote.side,
-              price: quote.price,
-              size: quote.size,
-            },
-            quote.idempotencyKey,
-          );
+          try {
+            await botApi.placeLimitOrder(
+              {
+                marketId: market.id,
+                outcomeId: quote.outcomeId,
+                side: quote.side,
+                price: quote.price,
+                size: quote.size,
+              },
+              quote.idempotencyKey,
+            );
+            quoteActions.push(`placed ${quote.outcomeId}:${quote.side} @ ${quote.price}`);
+          } catch (error) {
+            quoteActions.push(formatQuotePlacementFailure(quote, error));
+          }
         }
         // Track global exposure from this market
         globalExposureCents += readiness.perMarketExposureCents;
@@ -321,7 +327,7 @@ export async function runRuntimeSupervisor(
           inventoryExposureCents: readiness.inventoryExposureCents,
           globalExposureCents,
           maxGlobalExposureCents: globalExposureCap,
-          quoteActions: reconciliation.skipReasons,
+          quoteActions,
           perMarketExposureCapCents: deps.risk.maxPerMarketExposureCents,
         });
       } else {
@@ -398,4 +404,14 @@ function emptyBalance(): Balance {
 
 async function sleep(ms: number) {
   await new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function formatQuotePlacementFailure(
+  quote: { outcomeId: string; side: string; price: string },
+  error: unknown,
+) {
+  if (error instanceof PolyApiError) {
+    return `rejected ${quote.outcomeId}:${quote.side} @ ${quote.price} (${error.status} ${error.code}: ${error.message})`;
+  }
+  return `rejected ${quote.outcomeId}:${quote.side} @ ${quote.price} (${error instanceof Error ? error.message : "unknown_error"})`;
 }
