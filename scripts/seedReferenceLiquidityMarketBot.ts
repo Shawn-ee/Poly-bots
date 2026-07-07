@@ -31,7 +31,8 @@ async function main() {
     });
   }
 
-  console.log(JSON.stringify({ ...result, runtimePath }, null, 2));
+  const { botApiToken: _botApiToken, ...safeResult } = result;
+  console.log(JSON.stringify({ ...safeResult, botApiToken: result.botApiToken ? "[redacted]" : undefined, runtimePath }, null, 2));
 }
 
 function createAdminApi(baseUrl: string, devAdminUserId: string | null) {

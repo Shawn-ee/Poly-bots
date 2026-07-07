@@ -49,7 +49,7 @@ async function main() {
         tradable: market.tradable,
         ok: true,
         runtimePath,
-        result,
+        result: sanitizeSeedResult(result),
       });
     } catch (error) {
       results.push({
@@ -74,6 +74,14 @@ async function main() {
     blocked: results.filter((entry) => !entry.ok).length,
     results,
   }, null, 2));
+}
+
+function sanitizeSeedResult<T extends Record<string, unknown>>(result: T) {
+  const { botApiToken: _botApiToken, ...safeResult } = result;
+  return {
+    ...safeResult,
+    botApiToken: result.botApiToken ? "[redacted]" : undefined,
+  };
 }
 
 function parseArgs(argv: string[]) {
