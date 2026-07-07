@@ -39,14 +39,14 @@ Worktree: `C:\Users\hecto\projects\agent-workspaces\poly-bot-polymarket-mm`
 | Seed/init/prepare reference liquidity | `scripts/initReferenceLiquidityMarket.ts`, `seedReferenceLiquidityMarketBot.ts`, `prepareReferenceLiquidityEvent.ts`, `enableReferenceEventMm.ts`, `enableReferenceEventTrading.ts`, `checkReferenceLiquidityEventReadiness.ts` | `liquidity:*`, `markets:enable-event-trading` | Operator setup for local reference markets/bots | Local/staging only | Admin API shape | Yes | Keep with strict guards | package scripts, README | Needed for safe Phase 6 |
 | Stop/reset/control bots | `scripts/stopAllBots.ts`, `botsReset.ts`, `botControl.ts` | `bots:stop-all`, `bots:reset`, `bots:control` | Operational safety controls | Active | Bot config/API IDs | Yes | Keep | package scripts, README | Required kill/reset path |
 | Bot safety check | `scripts/checkBotSafety.ts`, `src/config/botSafety.ts` | `npm run bots:safety` | Env and runtime safety checks | Active | No | Yes | Keep/extend | package scripts, tests | Guardrails for local/staging live orders |
-| Slow down sim bots | `scripts/slow_down_sim_bots.cjs` | no package script in dev | Helper to slow simulation bots | Unknown | Runtime process assumptions | Not relevant | Do not delete until dependency audit complete | unreferenced by package scripts; original repo had deleted `.js` variant | Need repo-wide docs/systemd/orchestrator scan before removal |
+| Slow down sim bots | `scripts/slow_down_sim_bots.cjs` | no package script in dev | Helper to slow simulation bots | Local helper | Runtime process assumptions | Not relevant | Keep `.cjs`; deleted duplicate `.js` after dependency audit | unreferenced by package scripts; `docs/world-cup-bot-inventory.md` records the cleanup proof | Canonical helper is the CommonJS `.cjs` file |
 | Agent runner/supervisor | `src/runner/agentRunner.ts`, `scripts/agentSupervisorLoop.ts`, `src/agents/*` | `agents:*`, `agent:*` | Review-only agent recommendations | Active dry-run/review | No | Yes | Keep as review layer | package scripts, docs | Agents must not place orders directly |
 
 ## Dependency Reference Checks
 
 - Package script references are listed in `package.json`.
 - Runtime docs reference bot commands in `README.md`, `docs/bot-architecture.md`, `docs/polymarket-import-engine.md`, and `docs/agent-safety-policy.md`.
-- No obsolete bot deletion is approved by this audit. Before removal, run `rg` across `package.json`, `README.md`, `docs`, `scripts`, `src`, service files, orchestrator files, tests, and deployment/systemd files.
+- No obsolete bot deletion is approved by this audit except the later duplicate helper cleanup recorded in `docs/world-cup-bot-inventory.md`. Before any future removal, run `rg` across `package.json`, `README.md`, `docs`, `scripts`, `src`, service files, orchestrator files, tests, and deployment/systemd files.
 
 ## Polymarket API Investigation
 
@@ -106,7 +106,7 @@ Final architecture command aliases added:
 Dependency audit result:
 
 - No bot code was deleted in Phase 7.
-- `scripts/slow_down_sim_bots.js` and `scripts/slow_down_sim_bots.cjs` remain present because simulation docs and original checkout state made usage ambiguous enough to avoid deletion.
+- `scripts/slow_down_sim_bots.cjs` remains present. The duplicate `scripts/slow_down_sim_bots.js` was removed after a follow-up dependency audit confirmed no package script or source import depends on it.
 - Legacy strategy re-export shims remain because docs explicitly preserve old import paths and tests still reference top-level strategy modules.
 - User simulation/noise trader code remains dev-only and must not be used for final product liquidity, fake volume, or fake users.
 - Reference arbitrage observer remains observation-only and does not place orders.
